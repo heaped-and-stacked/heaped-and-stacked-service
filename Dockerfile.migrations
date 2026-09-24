@@ -1,0 +1,29 @@
+# The database's release step, as its own image: the schema migrations (Flyway) and the one-time
+# launch seed, built from the same commit as the API and tagged the same (sha-<commit>). It runs
+# once per release, before the new API, as the database's owner; the API itself connects as a
+# user that can't change the schema.
+#
+#   docker run --rm --env-file db.env <image> migrate   apply new migrations (the default)
+#   docker run --rm --env-file db.env <image> info      what's applied and what's pending
+#   docker run --rm --env-file db.env <image> seed      load the launch content (new environment only)
+#   docker run --rm --env-file db.env <image> export-seed   this database's content as a seed, on stdout
+#   docker run --rm --env-file db.env <image> backup    the whole database as SQL, on stdout
+#
+# db.env: DB_HOST, DB_PORT (default 5432), DB_NAME, DB_OWNER_USER, DB_OWNER_PASSWORD.
+# Base image pinned by digest; Dependabot (docker) proposes new digests.
+FROM flyway/flyway:12.4.0-alpine@sha256:b43c3d9b7227687682a9124451ac3dbc9b0003eca65290ad1dcda760345bc680
+
+USER root
+RUN apk add --no-cache postgresql16-client
+
+COPY src/main/resources/db/migration /flyway/sql
+COPY seed/initial-content.sql seed/export-content.sql /flyway/seed/
+COPY db/run.sh /flyway/run.sh
+RUN chmod 755 /flyway/run.sh
+
+# Don't run as root.
+RUN addgroup -S -g 10001 db && adduser -S -u 10001 -G db db
+USER 10001:10001
+
+ENTRYPOINT ["/flyway/run.sh"]
+CMD ["migrate"]
