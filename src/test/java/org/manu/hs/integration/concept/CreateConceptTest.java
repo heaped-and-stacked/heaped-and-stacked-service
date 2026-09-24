@@ -28,7 +28,7 @@ class CreateConceptTest extends AbstractIntegrationTest {
             """)
     void createConceptReturnsCreatedWhenPayloadIsMinimal() {
         // Given
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
         String requestBody = """
                 {
                     "tag": "java-core",
@@ -72,7 +72,7 @@ class CreateConceptTest extends AbstractIntegrationTest {
             """)
     void createConceptReturnsActiveConceptWhenCallerIsAdmin() {
         // Given
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
         String requestBody = """
                 {
                     "tag": "java-core",

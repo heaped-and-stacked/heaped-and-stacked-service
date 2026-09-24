@@ -2,6 +2,7 @@ package org.manu.hs.integration.concept;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.question.QuestionStatus;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.http.HttpStatus;
@@ -25,7 +26,7 @@ class DeleteConceptTest extends AbstractIntegrationTest {
     void deleteConceptReturnsNoContentWhenConceptExists() {
         // Given
         insertConcept("java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = delete("java-core");
@@ -38,6 +39,66 @@ class DeleteConceptTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
+            Given the author of a draft concept that no question uses
+            When they send a DELETE request
+            Then the concept is deleted with HTTP 204, as authors may withdraw their own drafts
+            """)
+    void deleteConceptReturnsNoContentWhenAuthorDeletesOwnDraftConcept() {
+        // Given
+        insertConcept("java-core", ConceptStatus.DRAFT);
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = delete("java-core");
+
+        // Then
+        response.expectStatus().isNoContent();
+
+        assertConceptDoesNotExist("java-core");
+    }
+
+    @Test
+    @DisplayName("""
+            Given the author of a concept that is no longer a draft
+            When they send a DELETE request
+            Then a forbidden response is returned and the concept is kept
+            """)
+    void deleteConceptReturnsForbiddenWhenAuthorDeletesNonDraftConcept() {
+        // Given
+        insertConcept("java-core", ConceptStatus.ACTIVE);
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = delete("java-core");
+
+        // Then
+        response.expectStatus().isForbidden();
+
+        assertEquals("java-core", findConceptByTag("java-core").getTag());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a draft concept written by someone else, and a caller who is not an admin
+            When they send a DELETE request
+            Then a forbidden response is returned and the concept is kept
+            """)
+    void deleteConceptReturnsForbiddenWhenNonAuthorDeletesConcept() {
+        // Given
+        insertConcept("java-core", ConceptStatus.DRAFT);
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = delete("java-core");
+
+        // Then
+        response.expectStatus().isForbidden();
+
+        assertEquals("java-core", findConceptByTag("java-core").getTag());
+    }
+
+    @Test
+    @DisplayName("""
             Given a concept that is linked to a question
             When a DELETE request is sent to the concepts endpoint
             Then a conflict is returned and both the concept and the link remain
@@ -46,7 +107,7 @@ class DeleteConceptTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = delete("java-core");

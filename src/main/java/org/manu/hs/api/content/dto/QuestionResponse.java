@@ -24,8 +24,8 @@ public class QuestionResponse {
     private QuestionStatus status;
     private String source;
     private List<String> conceptTags;
-    private String createdBy;
-    private String updatedBy;
+    private Long createdBy;
+    private Long updatedBy;
     private Instant createdAt;
     private Instant updatedAt;
 

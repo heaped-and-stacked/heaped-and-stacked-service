@@ -1,0 +1,25 @@
+# Local development only: a Postgres for running the service from the IDE.
+# Start it with `docker compose up -d` from this folder. Tests don't need it:
+# they start their own throwaway Postgres through Testcontainers.
+services:
+  postgres:
+    # Same image as the integration tests, so local runs and tests use one version.
+    image: postgres:16-alpine
+    container_name: heaped-and-stacked-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: heaped_and_stacked
+      POSTGRES_USER: heaped_and_stacked
+      POSTGRES_PASSWORD: local_dev_only
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U heaped_and_stacked -d heaped_and_stacked"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:

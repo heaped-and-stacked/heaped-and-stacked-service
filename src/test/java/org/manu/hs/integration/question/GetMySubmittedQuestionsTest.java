@@ -32,7 +32,7 @@ class GetMySubmittedQuestionsTest extends AbstractIntegrationTest {
         insertQuestion(QuestionStatus.DRAFT, OTHER_USER, "java-core");
         Long active = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
         Long newestRetired = insertQuestion(QuestionStatus.RETIRED, AUTHOR, "java-core");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = getMine();
@@ -60,7 +60,7 @@ class GetMySubmittedQuestionsTest extends AbstractIntegrationTest {
         insertConcept("java-core");
         insertConcept("java-generics");
         insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core", "java-generics");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = getMine();
@@ -86,7 +86,7 @@ class GetMySubmittedQuestionsTest extends AbstractIntegrationTest {
             """)
     void getMySubmittedQuestionsReturnsEmptyListWhenNoneSubmitted() {
         // Given
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = getMine();

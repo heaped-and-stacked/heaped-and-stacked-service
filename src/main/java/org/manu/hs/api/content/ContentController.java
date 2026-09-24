@@ -6,6 +6,7 @@ import org.manu.hs.api.content.dto.CreateConceptRequest;
 import org.manu.hs.api.content.dto.CreateQuestionRequest;
 import org.manu.hs.api.content.dto.QuestionResponse;
 import org.manu.hs.api.content.dto.UpdateConceptRequest;
+import org.manu.hs.api.content.dto.UpdateConceptStatusRequest;
 import org.manu.hs.api.content.dto.UpdateQuestionRequest;
 import org.manu.hs.api.content.dto.UpdateQuestionStatusRequest;
 import org.manu.hs.application.content.ContentApplication;
@@ -14,6 +15,7 @@ import org.manu.hs.application.content.command.SubmitQuestionCommand;
 import org.manu.hs.application.content.command.UpdateConceptCommand;
 import org.manu.hs.application.content.command.UpdateQuestionCommand;
 import org.manu.hs.domain.concept.Concept;
+import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionStatus;
 import org.springframework.http.HttpStatus;
@@ -61,10 +63,23 @@ public class ContentController {
         return ConceptResponse.toDto(updated);
     }
 
+    @PutMapping("/concepts/{tag}/status")
+    @ResponseStatus(HttpStatus.OK)
+    public ConceptResponse updateConceptStatus(@PathVariable String tag, @RequestBody UpdateConceptStatusRequest request) {
+        final Concept updated = applicationFacade.updateConceptStatus(tag, request.getStatus());
+        return ConceptResponse.toDto(updated);
+    }
+
     @GetMapping("/concepts")
     @ResponseStatus(HttpStatus.OK)
     public List<ConceptResponse> getConcepts() {
         return applicationFacade.getConcepts().stream().map(ConceptResponse::toDto).toList();
+    }
+
+    @GetMapping("/concepts/review")
+    @ResponseStatus(HttpStatus.OK)
+    public List<ConceptResponse> getConceptsForReview(@RequestParam(required = false) ConceptStatus status) {
+        return applicationFacade.getConceptsForReview(status).stream().map(ConceptResponse::toDto).toList();
     }
 
     // ---------------------------------------------------------------------

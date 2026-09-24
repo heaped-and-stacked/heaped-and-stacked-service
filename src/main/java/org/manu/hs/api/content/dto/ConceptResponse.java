@@ -20,8 +20,8 @@ public class ConceptResponse {
     private String description;
     private List<String> externalReferences;
     private ConceptStatus status;
-    private String createdBy;
-    private String updatedBy;
+    private Long createdBy;
+    private Long updatedBy;
     private Instant createdAt;
     private Instant updatedAt;
 

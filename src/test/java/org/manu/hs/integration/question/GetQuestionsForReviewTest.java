@@ -32,7 +32,7 @@ class GetQuestionsForReviewTest extends AbstractIntegrationTest {
         Long olderDraft = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
         insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
         Long newerDraft = insertQuestion(QuestionStatus.DRAFT, OTHER_USER, "java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = getForReview();
@@ -62,7 +62,7 @@ class GetQuestionsForReviewTest extends AbstractIntegrationTest {
         for (QuestionStatus status : QuestionStatus.values()) {
             insertQuestion(status, AUTHOR, "java-core");
         }
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = getForReview(filter.name());
@@ -87,7 +87,7 @@ class GetQuestionsForReviewTest extends AbstractIntegrationTest {
             """)
     void getQuestionsForReviewReturnsForbiddenWhenCallerIsNotAdmin() {
         // Given
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = getForReview();
@@ -104,7 +104,7 @@ class GetQuestionsForReviewTest extends AbstractIntegrationTest {
             """)
     void getQuestionsForReviewReturnsBadRequestWhenStatusIsUnknown() {
         // Given
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = getForReview("LIVE");

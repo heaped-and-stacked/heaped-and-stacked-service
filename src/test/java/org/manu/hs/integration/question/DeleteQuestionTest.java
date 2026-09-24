@@ -27,7 +27,7 @@ class DeleteQuestionTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = delete(questionId);
@@ -51,7 +51,7 @@ class DeleteQuestionTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(status, AUTHOR, "java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = delete(questionId);
@@ -72,7 +72,7 @@ class DeleteQuestionTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = delete(questionId);
@@ -93,7 +93,7 @@ class DeleteQuestionTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
-        actingAs(OTHER_USER, false);
+        actingAs(OTHER_USER);
 
         // When
         RestTestClient.ResponseSpec response = delete(questionId);

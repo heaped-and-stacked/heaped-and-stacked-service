@@ -6,9 +6,9 @@ import java.util.Optional;
 public interface QuestionRepository {
     Question insert(Question question);
     Question update(Long id, Question question);
-    Question updateStatus(Long id, QuestionStatus status, String updatedBy);
+    Question updateStatus(Long id, QuestionStatus status, Long updatedBy);
     void deleteById(Long id);
     Optional<Question> findById(Long id);
-    List<Question> findBySubmittedBy(String userId);
+    List<Question> findBySubmittedBy(Long userId);
     List<Question> findByStatus(QuestionStatus status);
 }

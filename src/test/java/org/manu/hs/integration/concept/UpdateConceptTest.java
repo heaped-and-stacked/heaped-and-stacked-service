@@ -34,7 +34,7 @@ class UpdateConceptTest extends AbstractIntegrationTest {
                 List.of("original-reference"),
                 ConceptStatus.ACTIVE,
                 AUTHOR);
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         String requestBody = """
                 {
@@ -124,7 +124,79 @@ class UpdateConceptTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
-            Given a payload missing a required field
+            Given the author of a draft concept
+            When they send a PUT request with a valid payload
+            Then the concept is updated with HTTP 200
+            """)
+    void updateConceptReturnsOkWhenAuthorEditsOwnDraftConcept() {
+        // Given
+        insertConcept("java-core", ConceptStatus.DRAFT);
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = update("java-core", """
+                {
+                    "name": "Java Core, reworded",
+                    "description": "Clearer description"
+                }
+                """);
+
+        // Then
+        response.expectStatus().isOk();
+
+        assertEquals("Java Core, reworded", findConceptByTag("java-core").getName());
+    }
+
+    @Test
+    @DisplayName("""
+            Given the author of a concept that is no longer a draft
+            When they send a PUT request
+            Then a forbidden response is returned and the concept is unchanged
+            """)
+    void updateConceptReturnsForbiddenWhenAuthorEditsNonDraftConcept() {
+        // Given
+        insertConcept("java-core", ConceptStatus.ACTIVE);
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = update("java-core", """
+                {
+                    "name": "Attempted rename",
+                    "description": "Attempted description"
+                }
+                """);
+
+        // Then
+        response.expectStatus().isForbidden();
+
+        assertEquals("Name of java-core", findConceptByTag("java-core").getName());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a draft concept written by someone else, and a caller who is not an admin
+            When they send a PUT request, even with an invalid payload
+            Then a forbidden response is returned, before the payload is checked
+            """)
+    void updateConceptReturnsForbiddenWhenNonAuthorEditsDraftConcept() {
+        // Given
+        insertConcept("java-core", ConceptStatus.DRAFT);
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = update("java-core", """
+                {
+                    "description": "No name"
+                }
+                """);
+
+        // Then
+        response.expectStatus().isForbidden();
+    }
+
+    @Test
+    @DisplayName("""
+            Given the author of a draft concept and a payload missing a required field
             When a PUT request is sent to the concepts endpoint
             Then a bad request is returned and the existing concept is unchanged
             """)
@@ -134,7 +206,10 @@ class UpdateConceptTest extends AbstractIntegrationTest {
                 "java-core",
                 "Java Core",
                 "Original description",
-                List.of("original-reference"));
+                List.of("original-reference"),
+                ConceptStatus.DRAFT,
+                AUTHOR);
+        actingAs(AUTHOR);
 
         String requestBody = """
                 {

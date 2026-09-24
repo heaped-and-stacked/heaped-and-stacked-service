@@ -4,7 +4,9 @@ import lombok.RequiredArgsConstructor;
 import org.manu.hs.application.content.command.CreateConceptCommand;
 import org.manu.hs.application.content.command.UpdateConceptCommand;
 import org.manu.hs.application.content.exception.ConceptAlreadyExistsException;
+import org.manu.hs.application.content.exception.ConceptHasActiveQuestionsException;
 import org.manu.hs.application.content.exception.ConceptInUseException;
+import org.manu.hs.application.content.exception.ConceptModificationForbiddenException;
 import org.manu.hs.application.content.exception.ConceptNotFoundException;
 import org.manu.hs.application.content.exception.InvalidConceptTagException;
 import org.manu.hs.application.content.exception.UnknownConceptTagException;
@@ -21,8 +23,8 @@ import java.util.stream.Collectors;
 import static org.manu.hs.application.common.Validations.requireNonBlank;
 
 /**
- * Concept rules that need stored data, building concepts from commands, and concept
- * persistence. Package-private: only ContentApplication uses it.
+ * Concept validation and rules, building concepts from commands, and concept persistence.
+ * Package-private: only ContentApplication uses it.
  * <p>
  * Never reads the current user: the caller's id and decisions based on it (such as
  * the starting status) are passed in, which keeps every method easy to unit test.
@@ -67,6 +69,10 @@ class ConceptService {
         return conceptRepository.findAll();
     }
 
+    List<Concept> findByStatus(ConceptStatus status) {
+        return conceptRepository.findByStatus(status);
+    }
+
     /** The concepts for the given tags, as stored; tags without a concept are left out. */
     List<Concept> findByTags(List<String> tags) {
         return conceptRepository.findByTags(tags);
@@ -87,9 +93,20 @@ class ConceptService {
         return concepts;
     }
 
-    void requireExists(String tag) {
-        if (!conceptRepository.existsByTag(tag)) {
-            throw new ConceptNotFoundException(tag);
+    Concept findByTagOrThrow(String tag) {
+        return conceptRepository.findByTag(tag)
+                .orElseThrow(() -> new ConceptNotFoundException(tag));
+    }
+
+    /**
+     * Admins may modify any concept in any status; authors only their own DRAFT concepts.
+     */
+    void requireCanBeModifiedBy(Concept concept, Long userId, boolean admin) {
+        final boolean authorOfDraft = concept.getCreatedBy().equals(userId)
+                && concept.getStatus() == ConceptStatus.DRAFT;
+
+        if (!admin && !authorOfDraft) {
+            throw new ConceptModificationForbiddenException(concept.getTag());
         }
     }
 
@@ -105,16 +122,33 @@ class ConceptService {
         }
     }
 
+    /**
+     * A concept used by an ACTIVE question may not go back to DRAFT; retiring it is allowed.
+     */
+    void requireCanMoveTo(String tag, ConceptStatus status) {
+        if (status == ConceptStatus.DRAFT && conceptRepository.isReferencedByActiveQuestion(tag)) {
+            throw new ConceptHasActiveQuestionsException(tag);
+        }
+    }
+
     // ---------------------------------------------------------------------
     // Building and persistence
     // ---------------------------------------------------------------------
 
-    Concept create(CreateConceptCommand command, ConceptStatus status, String userId) {
+    Concept create(CreateConceptCommand command, ConceptStatus status, Long userId) {
         return conceptRepository.save(newConcept(command, status), userId);
     }
 
-    Concept update(String tag, UpdateConceptCommand command, String userId) {
+    Concept update(String tag, UpdateConceptCommand command, Long userId) {
         return conceptRepository.update(updatedConcept(tag, command), userId);
+    }
+
+    Concept updateStatus(String tag, ConceptStatus status, Long updatedBy) {
+        return conceptRepository.updateStatus(tag, status, updatedBy);
+    }
+
+    void delete(String tag) {
+        conceptRepository.deleteByTag(tag);
     }
 
     /** Builds the concept to store from the command. Pure: no repository access. */
@@ -136,9 +170,5 @@ class ConceptService {
                 .description(command.getDescription())
                 .externalReferences(List.copyOf(command.getExternalReferences()))
                 .build();
-    }
-
-    void delete(String tag) {
-        conceptRepository.deleteByTag(tag);
     }
 }

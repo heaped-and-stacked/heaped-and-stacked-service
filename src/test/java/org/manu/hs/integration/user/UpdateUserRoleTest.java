@@ -1,0 +1,201 @@
+package org.manu.hs.integration.user;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.manu.hs.api.user.dto.UserResponse;
+import org.manu.hs.domain.user.UserRole;
+import org.manu.hs.domain.user.UserStatus;
+import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.client.RestTestClient;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
+/**
+ * PUT /admin/users/{id}/role
+ */
+class UpdateUserRoleTest extends AbstractIntegrationTest {
+
+    @Test
+    @DisplayName("""
+            Given a signed-in admin
+            When they promote a member to ADMIN
+            Then the role is changed and the user is returned with HTTP 200
+            """)
+    void updateUserRoleReturnsOkWhenAdminPromotesMember() {
+        // Given
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateRole(AUTHOR, "ADMIN");
+
+        // Then
+        UserResponse user = response
+                .expectStatus().isOk()
+                .expectBody(UserResponse.class)
+                .returnResult()
+                .getResponseBody();
+
+        assertNotNull(user);
+        assertEquals(UserRole.ADMIN, user.getRole());
+        assertEquals(UserRole.ADMIN, findUser(AUTHOR).getRole());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a signed-in admin and another admin
+            When they demote the other admin to MEMBER
+            Then the role is changed with HTTP 200
+            """)
+    void updateUserRoleReturnsOkWhenAdminDemotesAnotherAdmin() {
+        // Given
+        insertUser(1004L, UserRole.ADMIN);
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateRole(1004L, "MEMBER");
+
+        // Then
+        response
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.role").isEqualTo("MEMBER");
+
+        assertEquals(UserRole.MEMBER, findUser(1004L).getRole());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a member who is signed in elsewhere
+            When an admin changes their role
+            Then that other session is signed out, so the new role applies from their next sign-in
+            """)
+    void updateUserRoleEndsTheUsersSessions() {
+        // Given
+        RestTestClient membersBrowser = clientSignedInAs(AUTHOR);
+        actingAs(ADMIN);
+
+        // When
+        updateRole(AUTHOR, "ADMIN").expectStatus().isOk();
+
+        // Then
+        membersBrowser
+                .get()
+                .uri("/users/me")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    @DisplayName("""
+            Given the signed-in admin is the last active admin
+            When they demote themselves to MEMBER
+            Then a conflict is returned and they stay ADMIN, so the platform always has an admin
+            """)
+    void updateUserRoleReturnsConflictWhenDemotingLastActiveAdmin() {
+        // Given
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateRole(ADMIN, "MEMBER");
+
+        // Then
+        response.expectStatus().isEqualTo(HttpStatus.CONFLICT);
+
+        assertEquals(UserRole.ADMIN, findUser(ADMIN).getRole());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a signed-in admin
+            When they change the role of a user that does not exist, or that deleted their account
+            Then a not found response is returned
+            """)
+    void updateUserRoleReturnsNotFoundWhenUserDoesNotExistOrIsDeleted() {
+        // Given
+        insertUser(1004L, UserRole.MEMBER, UserStatus.DELETED);
+        actingAs(ADMIN);
+
+        // When / Then
+        updateRole(999999L, "ADMIN").expectStatus().isNotFound();
+        updateRole(1004L, "ADMIN").expectStatus().isNotFound();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a signed-in admin
+            When the request has no role
+            Then a bad request is returned and the role is unchanged
+            """)
+    void updateUserRoleReturnsBadRequestWhenRoleIsMissing() {
+        // Given
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = restClient
+                .put()
+                .uri("/admin/users/{id}/role", AUTHOR)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{}")
+                .exchange();
+
+        // Then
+        response
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.message").isEqualTo("role is required");
+
+        assertEquals(UserRole.MEMBER, findUser(AUTHOR).getRole());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a signed-in admin
+            When the request names a role that does not exist
+            Then a bad request is returned
+            """)
+    void updateUserRoleReturnsBadRequestWhenRoleIsUnknown() {
+        // Given
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateRole(AUTHOR, "SUPERUSER");
+
+        // Then
+        response.expectStatus().isBadRequest();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a signed-in member who is not an admin
+            When they try to change a role, even their own
+            Then a forbidden response is returned
+            """)
+    void updateUserRoleReturnsForbiddenWhenCallerIsNotAdmin() {
+        // Given
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = updateRole(AUTHOR, "ADMIN");
+
+        // Then
+        response.expectStatus().isForbidden();
+
+        assertEquals(UserRole.MEMBER, findUser(AUTHOR).getRole());
+    }
+
+    private RestTestClient.ResponseSpec updateRole(Long userId, String role) {
+        return restClient
+                .put()
+                .uri("/admin/users/{id}/role", userId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("""
+                        {
+                            "role": "%s"
+                        }
+                        """.formatted(role))
+                .exchange();
+    }
+}

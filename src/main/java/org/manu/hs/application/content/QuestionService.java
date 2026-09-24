@@ -22,8 +22,8 @@ import static org.manu.hs.application.common.Validations.requireNonBlank;
 import static org.manu.hs.application.common.Validations.requireNonNull;
 
 /**
- * Question rules, building questions from commands, and question persistence.
- * Package-private: only ContentApplication uses it.
+ * Question validation and rules, building questions from commands, and question
+ * persistence. Package-private: only ContentApplication uses it.
  * <p>
  * Never reads the current user: the caller's id and decisions based on it (such as
  * the starting status) are passed in, which keeps every method easy to unit test.
@@ -95,7 +95,7 @@ class QuestionService {
                 .orElseThrow(() -> new QuestionNotFoundException(id));
     }
 
-    List<Question> findBySubmittedBy(String userId) {
+    List<Question> findBySubmittedBy(Long userId) {
         return questionRepository.findBySubmittedBy(userId);
     }
 
@@ -106,7 +106,7 @@ class QuestionService {
     /**
      * Admins may modify any question in any status; authors only their own DRAFT questions.
      */
-    void requireCanBeModifiedBy(Question question, String userId, boolean admin) {
+    void requireCanBeModifiedBy(Question question, Long userId, boolean admin) {
         final boolean authorOfDraft = question.getCreatedBy().equals(userId)
                 && question.getStatus() == QuestionStatus.DRAFT;
 
@@ -133,16 +133,24 @@ class QuestionService {
     // Building and persistence
     // ---------------------------------------------------------------------
 
-    Question create(SubmitQuestionCommand command, QuestionStatus status, String userId) {
+    Question create(SubmitQuestionCommand command, QuestionStatus status, Long userId) {
         return questionRepository.insert(newQuestion(command, status, userId));
     }
 
-    Question update(Question existing, UpdateQuestionCommand command, String userId) {
+    Question update(Question existing, UpdateQuestionCommand command, Long userId) {
         return questionRepository.update(existing.getId(), updatedQuestion(existing, command, userId));
     }
 
+    Question updateStatus(Long id, QuestionStatus status, Long updatedBy) {
+        return questionRepository.updateStatus(id, status, updatedBy);
+    }
+
+    void delete(Long id) {
+        questionRepository.deleteById(id);
+    }
+
     /** Builds the question to store from the command. Pure: no repository access. */
-    Question newQuestion(SubmitQuestionCommand command, QuestionStatus status, String userId) {
+    Question newQuestion(SubmitQuestionCommand command, QuestionStatus status, Long userId) {
         return Question.builder()
                 .conceptTags(withoutDuplicates(command.getConceptTags()))
                 .requirement(command.getRequirement())
@@ -161,7 +169,7 @@ class QuestionService {
      * Builds the edited question: content comes from the command; id, status and author
      * are kept from the stored question. Pure: no repository access.
      */
-    Question updatedQuestion(Question existing, UpdateQuestionCommand command, String userId) {
+    Question updatedQuestion(Question existing, UpdateQuestionCommand command, Long userId) {
         return existing.toBuilder()
                 .conceptTags(withoutDuplicates(command.getConceptTags()))
                 .requirement(command.getRequirement())
@@ -172,14 +180,6 @@ class QuestionService {
                 .source(command.getSource())
                 .updatedBy(userId)
                 .build();
-    }
-
-    Question updateStatus(Long id, QuestionStatus status, String updatedBy) {
-        return questionRepository.updateStatus(id, status, updatedBy);
-    }
-
-    void delete(Long id) {
-        questionRepository.deleteById(id);
     }
 
     /** Duplicate tags are dropped silently, keeping the first occurrence and the order. */

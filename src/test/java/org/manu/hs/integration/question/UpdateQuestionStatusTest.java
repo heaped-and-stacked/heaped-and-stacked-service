@@ -43,7 +43,7 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(from, AUTHOR, "java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = updateStatus(questionId, to.name());
@@ -77,7 +77,7 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
         insertConcept("java-core");
         insertConcept("java-records", ConceptStatus.DRAFT);
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core", "java-records");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = updateStatus(questionId, "ACTIVE");
@@ -103,7 +103,7 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-records", ConceptStatus.DRAFT);
         Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-records");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = updateStatus(questionId, target.name());
@@ -124,7 +124,7 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core", ConceptStatus.RETIRED);
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = updateStatus(questionId, "ACTIVE");
@@ -145,7 +145,7 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = updateStatus(questionId, "ACTIVE");
@@ -164,7 +164,7 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
             """)
     void updateQuestionStatusReturnsNotFoundWhenQuestionDoesNotExist() {
         // Given
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = updateStatus(999_999L, "ACTIVE");
@@ -183,7 +183,7 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = restClient
@@ -213,7 +213,7 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = updateStatus(questionId, "LIVE");

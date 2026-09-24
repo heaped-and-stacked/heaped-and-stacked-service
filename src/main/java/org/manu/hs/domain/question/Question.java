@@ -24,8 +24,8 @@ public class Question {
     private int expectedDurationMinutes;
     private QuestionStatus status;
     private String source;
-    private String createdBy;
-    private String updatedBy;
+    private Long createdBy;
+    private Long updatedBy;
     private Instant createdAt;
     private Instant updatedAt;
 

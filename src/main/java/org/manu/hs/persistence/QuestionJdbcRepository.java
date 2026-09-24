@@ -140,7 +140,7 @@ public class QuestionJdbcRepository implements QuestionRepository {
     }
 
     @Override
-    public Question updateStatus(Long id, QuestionStatus status, String updatedBy) {
+    public Question updateStatus(Long id, QuestionStatus status, Long updatedBy) {
         jdbcTemplate.update(
                 UPDATE_STATUS,
                 new MapSqlParameterSource()
@@ -173,7 +173,7 @@ public class QuestionJdbcRepository implements QuestionRepository {
     }
 
     @Override
-    public List<Question> findBySubmittedBy(String userId) {
+    public List<Question> findBySubmittedBy(Long userId) {
         return jdbcTemplate.query(
                 FIND_BY_SUBMITTED_BY,
                 Map.of("created_by", userId),
@@ -232,8 +232,8 @@ public class QuestionJdbcRepository implements QuestionRepository {
                 .expectedDurationMinutes(resultSet.getInt("expected_duration_minutes"))
                 .status(QuestionStatus.valueOf(resultSet.getString("question_status")))
                 .source(resultSet.getString("source"))
-                .createdBy(resultSet.getString("created_by"))
-                .updatedBy(resultSet.getString("updated_by"))
+                .createdBy(resultSet.getLong("created_by"))
+                .updatedBy(resultSet.getLong("updated_by"))
                 .createdAt(resultSet.getTimestamp("created_at").toInstant())
                 .updatedAt(resultSet.getTimestamp("updated_at").toInstant())
                 .conceptTags(readConceptTags(resultSet))

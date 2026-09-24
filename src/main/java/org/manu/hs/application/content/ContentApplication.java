@@ -2,7 +2,6 @@ package org.manu.hs.application.content;
 
 import lombok.RequiredArgsConstructor;
 import org.manu.hs.application.common.CurrentUserProvider;
-import org.manu.hs.application.common.exception.AdminRequiredException;
 import org.manu.hs.application.content.command.CreateConceptCommand;
 import org.manu.hs.application.content.command.SubmitQuestionCommand;
 import org.manu.hs.application.content.command.UpdateConceptCommand;
@@ -48,21 +47,39 @@ public class ContentApplication {
     }
 
     public void deleteConcept(String tag) {
-        conceptService.requireExists(tag);
+        final Concept existing = conceptService.findByTagOrThrow(tag);
+        conceptService.requireCanBeModifiedBy(existing, userProvider.userId(), userProvider.isAdmin());
         conceptService.requireNotInUse(tag);
 
         conceptService.delete(tag);
     }
 
     public Concept updateConcept(String tag, UpdateConceptCommand command) {
-        conceptService.requireExists(tag);
+        final Concept existing = conceptService.findByTagOrThrow(tag);
+        conceptService.requireCanBeModifiedBy(existing, userProvider.userId(), userProvider.isAdmin());
         conceptService.validate(command);
 
         return conceptService.update(tag, command, userProvider.userId());
     }
 
+    public Concept updateConceptStatus(String tag, ConceptStatus newStatus) {
+        conceptService.findByTagOrThrow(tag);
+        userProvider.requireAdmin("change the status of a concept");
+        requireNonNull(newStatus, "status");
+        conceptService.requireCanMoveTo(tag, newStatus);
+
+        return conceptService.updateStatus(tag, newStatus, userProvider.userId());
+    }
+
     public List<Concept> getConcepts() {
         return conceptService.findAll();
+    }
+
+    public List<Concept> getConceptsForReview(ConceptStatus statusFilter) {
+        userProvider.requireAdmin("view the concept review queue");
+
+        final ConceptStatus status = statusFilter == null ? ConceptStatus.DRAFT : statusFilter;
+        return conceptService.findByStatus(status);
     }
 
     // ---------------------------------------------------------------------
@@ -98,7 +115,7 @@ public class ContentApplication {
 
     public Question updateQuestionStatus(Long id, QuestionStatus newStatus) {
         final Question existing = questionService.findByIdOrThrow(id);
-        requireAdmin("change the status of a question");
+        userProvider.requireAdmin("change the status of a question");
         requireNonNull(newStatus, "status");
 
         if (newStatus == QuestionStatus.ACTIVE) {
@@ -120,19 +137,9 @@ public class ContentApplication {
     }
 
     public List<Question> getQuestionsForReview(QuestionStatus statusFilter) {
-        requireAdmin("view the review queue");
+        userProvider.requireAdmin("view the review queue");
 
         final QuestionStatus status = statusFilter == null ? QuestionStatus.DRAFT : statusFilter;
         return questionService.findByStatus(status);
-    }
-
-    // ---------------------------------------------------------------------
-    // Permissions
-    // ---------------------------------------------------------------------
-
-    private void requireAdmin(String operation) {
-        if (!userProvider.isAdmin()) {
-            throw new AdminRequiredException(operation);
-        }
     }
 }

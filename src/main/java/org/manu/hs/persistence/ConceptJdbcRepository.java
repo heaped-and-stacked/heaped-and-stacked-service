@@ -35,6 +35,14 @@ public class ConceptJdbcRepository implements ConceptRepository {
             ORDER BY tag
             """;
 
+    private static final String FIND_BY_STATUS = """
+            SELECT tag, name, description, external_references, concept_status,
+                   created_by, updated_by, created_at, updated_at
+            FROM concept
+            WHERE concept_status = :status
+            ORDER BY created_at, tag
+            """;
+
     private static final String FIND_BY_TAGS = """
             SELECT tag, name, description, external_references, concept_status,
                    created_by, updated_by, created_at, updated_at
@@ -58,6 +66,13 @@ public class ConceptJdbcRepository implements ConceptRepository {
             WHERE tag = :tag
             """;
 
+    private static final String UPDATE_STATUS = """
+            UPDATE concept
+            SET concept_status = :status,
+                updated_by = :updated_by
+            WHERE tag = :tag
+            """;
+
     private static final String DELETE = """
             DELETE FROM concept
             WHERE tag = :tag
@@ -67,7 +82,7 @@ public class ConceptJdbcRepository implements ConceptRepository {
     private final ObjectMapper objectMapper;
 
     @Override
-    public Concept save(Concept concept, String createdBy) {
+    public Concept save(Concept concept, Long createdBy) {
         String tag = jdbcTemplate.queryForObject(
                 INSERT,
                 insertParameters(concept, createdBy),
@@ -114,7 +129,15 @@ public class ConceptJdbcRepository implements ConceptRepository {
     }
 
     @Override
-    public Concept update(Concept concept, String updatedBy) {
+    public List<Concept> findByStatus(ConceptStatus status) {
+        return jdbcTemplate.query(
+                FIND_BY_STATUS,
+                Map.of("status", status.name()),
+                this::mapConcept);
+    }
+
+    @Override
+    public Concept update(Concept concept, Long updatedBy) {
         jdbcTemplate.update(
                 UPDATE,
                 updateParameters(concept, updatedBy));
@@ -122,6 +145,21 @@ public class ConceptJdbcRepository implements ConceptRepository {
                 .orElseThrow(() ->
                         new IllegalStateException(
                                 "Concept was updated but could not be retrieved"));
+    }
+
+    @Override
+    public Concept updateStatus(String tag, ConceptStatus status, Long updatedBy) {
+        jdbcTemplate.update(
+                UPDATE_STATUS,
+                new MapSqlParameterSource()
+                        .addValue("tag", tag)
+                        .addValue("status", status.name())
+                        .addValue("updated_by", updatedBy));
+
+        return findByTag(tag)
+                .orElseThrow(() ->
+                        new IllegalStateException(
+                                "Concept status was updated but could not be retrieved"));
     }
 
     @Override
@@ -148,6 +186,24 @@ public class ConceptJdbcRepository implements ConceptRepository {
     }
 
     @Override
+    public boolean isReferencedByActiveQuestion(String tag) {
+        Boolean referenced = jdbcTemplate.queryForObject(
+                """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM question_concept qc
+                            JOIN question q ON q.id = qc.question_id
+                            WHERE qc.concept_tag = :tag
+                              AND q.question_status = 'ACTIVE'
+                        )
+                        """,
+                Map.of("tag", tag),
+                Boolean.class);
+
+        return Boolean.TRUE.equals(referenced);
+    }
+
+    @Override
     public List<Concept> findByTags(Collection<String> tags) {
         // "IN ()" is invalid SQL, so an empty list is answered without a query.
         if (tags.isEmpty()) {
@@ -160,7 +216,7 @@ public class ConceptJdbcRepository implements ConceptRepository {
                 this::mapConcept);
     }
 
-    private MapSqlParameterSource insertParameters(Concept concept, String createdBy) {
+    private MapSqlParameterSource insertParameters(Concept concept, Long createdBy) {
         return new MapSqlParameterSource()
                 .addValue("tag", concept.getTag())
                 .addValue("name", concept.getName())
@@ -170,7 +226,7 @@ public class ConceptJdbcRepository implements ConceptRepository {
                 .addValue("created_by", createdBy);
     }
 
-    private MapSqlParameterSource updateParameters(Concept concept, String updatedBy) {
+    private MapSqlParameterSource updateParameters(Concept concept, Long updatedBy) {
         return new MapSqlParameterSource()
                 .addValue("tag", concept.getTag())
                 .addValue("name", concept.getName())
@@ -190,8 +246,8 @@ public class ConceptJdbcRepository implements ConceptRepository {
                 .description(resultSet.getString("description"))
                 .externalReferences(deserializeReferences(resultSet.getString("external_references")))
                 .status(ConceptStatus.valueOf(resultSet.getString("concept_status")))
-                .createdBy(resultSet.getString("created_by"))
-                .updatedBy(resultSet.getString("updated_by"))
+                .createdBy(resultSet.getLong("created_by"))
+                .updatedBy(resultSet.getLong("updated_by"))
                 .createdAt(resultSet.getTimestamp("created_at").toInstant())
                 .updatedAt(resultSet.getTimestamp("updated_at").toInstant())
                 .build();

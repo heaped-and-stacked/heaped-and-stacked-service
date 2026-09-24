@@ -36,7 +36,7 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
     void submitQuestionReturnsCreatedWhenPayloadIsValid() {
         // Given
         insertConcept("java-core");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         String requestBody = """
                 {
@@ -89,7 +89,7 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
     void submitQuestionReturnsActiveQuestionWhenCallerIsAdmin() {
         // Given
         insertConcept("java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = submit(validQuestionJson("java-core"));
@@ -115,7 +115,7 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
     void submitQuestionReturnsCreatedWhenMemberLinksDraftConcept() {
         // Given
         insertConcept("java-records", ConceptStatus.DRAFT);
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = submit(validQuestionJson("java-records"));
@@ -137,7 +137,7 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         insertConcept("java-records", ConceptStatus.DRAFT);
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = submit(validQuestionJson("java-core", "java-records"));
@@ -162,7 +162,7 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         insertConcept("java-generics");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response =
@@ -188,7 +188,7 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
     void submitQuestionIgnoresServerOwnedFields() {
         // Given
         insertConcept("java-core");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         String requestBody = """
                 {
@@ -214,39 +214,23 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
                 .jsonPath("$.createdBy").isEqualTo(AUTHOR);
     }
 
+    /**
+     * A few representative cases: every rule is listed in QuestionServiceTest. These prove
+     * that a broken rule reaches the client as a 400 with its message.
+     */
     static Stream<Arguments> invalidPayloads() {
         String valid = validQuestionJson("java-core");
         return Stream.of(
                 arguments("requirement is missing",
                         valid.replace("\"requirement\": \"Updated requirement\",", ""),
                         "requirement is required"),
-                arguments("requirement is blank",
-                        valid.replace("\"Updated requirement\"", "\"   \""),
-                        "requirement is required"),
-                arguments("sampleSolution is missing",
-                        valid.replace("\"sampleSolution\": \"Updated solution\",", ""),
-                        "sampleSolution is required"),
-                arguments("type is missing",
-                        valid.replace("\"type\": \"GOTCHA\",", ""),
-                        "type is required"),
+                // A missing number must stay "missing" through JSON binding, not become 0.
                 arguments("difficultyScore is missing",
                         valid.replace("\"difficultyScore\": 4,", ""),
                         "difficultyScore is required"),
-                arguments("difficultyScore is 0",
-                        valid.replace("\"difficultyScore\": 4", "\"difficultyScore\": 0"),
-                        "difficultyScore must be between 1 and 10"),
                 arguments("difficultyScore is 11",
                         valid.replace("\"difficultyScore\": 4", "\"difficultyScore\": 11"),
-                        "difficultyScore must be between 1 and 10"),
-                arguments("expectedDurationMinutes is missing",
-                        valid.replace("\"expectedDurationMinutes\": 8,", ""),
-                        "expectedDurationMinutes is required"),
-                arguments("expectedDurationMinutes is 0",
-                        valid.replace("\"expectedDurationMinutes\": 8", "\"expectedDurationMinutes\": 0"),
-                        "expectedDurationMinutes must be greater than 0"),
-                arguments("conceptTags is empty",
-                        validQuestionJson(),
-                        "conceptTags is required"));
+                        "difficultyScore must be between 1 and 10"));
     }
 
     @ParameterizedTest(name = "{0}")

@@ -33,7 +33,7 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
         insertConcept("java-core");
         insertConcept("java-generics");
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         String requestBody = """
                 {
@@ -80,7 +80,7 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core"));
@@ -110,7 +110,7 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
         insertConcept("java-core");
         insertConcept("java-records", ConceptStatus.DRAFT);
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-records"));
@@ -132,7 +132,7 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
         insertConcept("java-core");
         insertConcept("java-records", ConceptStatus.DRAFT);
         Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
-        actingAs(ADMIN, true);
+        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core", "java-records"));
@@ -158,7 +158,7 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
-        actingAs(OTHER_USER, false);
+        actingAs(OTHER_USER);
 
         // Forbidden is reported before the payload is validated.
         String invalidRequestBody = """
@@ -186,7 +186,7 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core"));
@@ -205,7 +205,7 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
             """)
     void updateQuestionReturnsNotFoundWhenQuestionDoesNotExist() {
         // Given
-        actingAs(OTHER_USER, false);
+        actingAs(OTHER_USER);
 
         // Not found is reported before permissions and payload are checked.
         String invalidRequestBody = """
@@ -235,7 +235,7 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
         // Given
         insertConcept("java-core");
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
-        actingAs(AUTHOR, false);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = update(questionId, validQuestionJson());
