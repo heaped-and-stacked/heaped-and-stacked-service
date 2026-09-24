@@ -95,6 +95,7 @@ CREATE TABLE concept (
     description TEXT NOT NULL,
     external_references JSONB NOT NULL DEFAULT '[]'::jsonb,
     concept_status VARCHAR(20) NOT NULL DEFAULT 'DRAFT',
+    contribution_policy VARCHAR(20) NOT NULL DEFAULT 'AUTO_ACCEPT',
 
     created_by BIGINT NOT NULL,
     updated_by BIGINT NOT NULL,
@@ -104,9 +105,14 @@ CREATE TABLE concept (
     CONSTRAINT uk_concept_tag
         UNIQUE (tag),
 
-    -- Same lifecycle as questions: members propose (DRAFT), admins publish or retire.
+    -- Owned by its author (created_by), who publishes it; admins may also unpublish or retire.
     CONSTRAINT chk_concept_status
         CHECK (concept_status IN ('DRAFT', 'ACTIVE', 'RETIRED')),
+
+    -- Whether other users' questions are accepted for this concept straight away, or wait
+    -- for the owner's approval.
+    CONSTRAINT chk_concept_contribution_policy
+        CHECK (contribution_policy IN ('AUTO_ACCEPT', 'OWNER_APPROVAL')),
 
     CONSTRAINT chk_concept_tag_kebab_case
         CHECK (tag ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
@@ -135,17 +141,17 @@ CREATE TRIGGER trg_concept_set_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION set_updated_at();
 
--- Backs the concept review queue and the learner's topic list (ACTIVE only).
+-- Backs the learner's topic list (ACTIVE only).
 CREATE INDEX idx_concept_status
     ON concept (concept_status);
 
 CREATE TABLE question (
     id BIGSERIAL PRIMARY KEY,
+    -- A short name for the question, shown above it and in lists.
+    title VARCHAR(120) NOT NULL,
     requirement TEXT NOT NULL,
     sample_solution TEXT NOT NULL,
-    question_type VARCHAR(30) NOT NULL,
     difficulty_score INT NOT NULL,
-    expected_duration_minutes INT NOT NULL,
     question_status VARCHAR(20) NOT NULL DEFAULT 'DRAFT',
     source VARCHAR(200),
 
@@ -154,30 +160,20 @@ CREATE TABLE question (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
+    CONSTRAINT chk_question_title_not_blank
+        CHECK (btrim(title) <> ''),
+
     CONSTRAINT chk_question_requirement_not_blank
         CHECK (btrim(requirement) <> ''),
 
     CONSTRAINT chk_question_sample_solution_not_blank
         CHECK (btrim(sample_solution) <> ''),
 
-    CONSTRAINT chk_question_type
-        CHECK (question_type IN (
-            'DEFINITION',
-            'GOTCHA',
-            'CODE_ANALYSIS',
-            'BUG_HUNT',
-            'IMPLEMENTATION',
-            'DESIGN'
-        )),
-
     CONSTRAINT chk_question_status
-        CHECK (question_status IN ('DRAFT', 'ACTIVE', 'RETIRED')),
+        CHECK (question_status IN ('DRAFT', 'SUBMITTED', 'RETIRED')),
 
     CONSTRAINT chk_question_difficulty_score_range
         CHECK (difficulty_score BETWEEN 1 AND 10),
-
-    CONSTRAINT chk_question_expected_duration_positive
-        CHECK (expected_duration_minutes > 0),
 
     -- Users are only soft deleted, so these references always stay valid.
     CONSTRAINT fk_question_created_by
@@ -198,16 +194,32 @@ CREATE TRIGGER trg_question_set_updated_at
 CREATE INDEX idx_question_created_by
     ON question (created_by);
 
--- Backs GET /content/questions/review (filtered by status, DRAFT by default).
+-- Backs queries by status, such as the SUBMITTED questions shown to learners.
 CREATE INDEX idx_question_status
     ON question (question_status);
 
 CREATE TABLE question_concept (
     question_id BIGINT NOT NULL,
     concept_tag VARCHAR(100) NOT NULL,
+    -- Whether the question is accepted for this concept; decided per concept, by its owner
+    -- when the concept's contribution policy asks for approval.
+    link_status VARCHAR(20) NOT NULL,
+    decided_by BIGINT,
+    decided_at TIMESTAMPTZ,
 
     CONSTRAINT pk_question_concept
         PRIMARY KEY (question_id, concept_tag),
+
+    CONSTRAINT chk_question_concept_link_status
+        CHECK (link_status IN ('PENDING', 'ACCEPTED', 'DECLINED')),
+
+    -- A link still waiting for its owner has no decision yet.
+    CONSTRAINT chk_question_concept_pending_undecided
+        CHECK (link_status <> 'PENDING' OR (decided_by IS NULL AND decided_at IS NULL)),
+
+    CONSTRAINT fk_question_concept_decided_by
+        FOREIGN KEY (decided_by)
+        REFERENCES app_user (id),
 
     -- Deleting a question removes its links.
     CONSTRAINT fk_question_concept_question
@@ -223,8 +235,59 @@ CREATE TABLE question_concept (
         ON DELETE RESTRICT
 );
 
+-- Also backs the review list: the questions waiting on a concept.
 CREATE INDEX idx_question_concept_concept_tag
-    ON question_concept (concept_tag);
+    ON question_concept (concept_tag, link_status);
+
+-- ---------------------------------------------------------------------
+-- Learning
+-- ---------------------------------------------------------------------
+
+CREATE TABLE answer (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    question_id BIGINT NOT NULL,
+    answer_text TEXT NOT NULL,
+    -- The question exactly as it was answered: later edits must not change what the learner saw.
+    question_snapshot JSONB NOT NULL,
+    -- The learner's optional self-assessment, both on a 1 to 10 scale.
+    self_grade SMALLINT,
+    perceived_difficulty SMALLINT,
+    answered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT chk_answer_text_not_blank
+        CHECK (btrim(answer_text) <> ''),
+
+    CONSTRAINT chk_answer_self_grade_range
+        CHECK (self_grade BETWEEN 1 AND 10),
+
+    CONSTRAINT chk_answer_perceived_difficulty_range
+        CHECK (perceived_difficulty BETWEEN 1 AND 10),
+
+    -- Users are only soft deleted, so this reference always stays valid.
+    CONSTRAINT fk_answer_user
+        FOREIGN KEY (user_id)
+        REFERENCES app_user (id),
+
+    -- An answered question cannot be deleted, so learners keep their history: it is retired
+    -- instead. The service checks this first to answer 409; RESTRICT guarantees it.
+    CONSTRAINT fk_answer_question
+        FOREIGN KEY (question_id)
+        REFERENCES question (id)
+        ON DELETE RESTRICT
+);
+
+-- Backs GET /learning/answers: a learner's answers, newest first.
+CREATE INDEX idx_answer_user_answered_at
+    ON answer (user_id, answered_at DESC);
+
+-- Backs picking the next question: what this learner answered, how often and when last.
+CREATE INDEX idx_answer_user_question
+    ON answer (user_id, question_id, answered_at DESC);
+
+-- Backs the "has answers" check before deleting a question (the index above starts with user_id).
+CREATE INDEX idx_answer_question_id
+    ON answer (question_id);
 
 -- ---------------------------------------------------------------------
 -- HTTP sessions (Spring Session JDBC)

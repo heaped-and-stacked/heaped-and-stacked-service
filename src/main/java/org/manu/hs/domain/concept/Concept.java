@@ -18,6 +18,8 @@ public class Concept {
     private String description;
     private List<String> externalReferences;
     private ConceptStatus status;
+    private ContributionPolicy contributionPolicy;
+    /** The author, who is also the concept's owner. */
     private Long createdBy;
     private Long updatedBy;
     private Instant createdAt;

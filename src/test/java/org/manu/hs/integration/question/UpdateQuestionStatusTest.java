@@ -25,13 +25,13 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
     @ParameterizedTest(name = "{0} -> {1}")
     @CsvSource({
             "DRAFT,   DRAFT",
-            "DRAFT,   ACTIVE",
+            "DRAFT,   SUBMITTED",
             "DRAFT,   RETIRED",
-            "ACTIVE,  DRAFT",
-            "ACTIVE,  ACTIVE",
-            "ACTIVE,  RETIRED",
+            "SUBMITTED,  DRAFT",
+            "SUBMITTED,  SUBMITTED",
+            "SUBMITTED,  RETIRED",
             "RETIRED, DRAFT",
-            "RETIRED, ACTIVE",
+            "RETIRED, SUBMITTED",
             "RETIRED, RETIRED"
     })
     @DisplayName("""
@@ -69,10 +69,10 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
     @Test
     @DisplayName("""
             Given a draft question linked to a concept that is still a draft
-            When an admin sets the question status to ACTIVE
+            When an admin sets the question status to SUBMITTED
             Then a conflict is returned and the question stays a draft
             """)
-    void updateQuestionStatusReturnsConflictWhenActivatingWithDraftConcept() {
+    void updateQuestionStatusReturnsConflictWhenSubmittingWithDraftConcept() {
         // Given
         insertConcept("java-core");
         insertConcept("java-records", ConceptStatus.DRAFT);
@@ -80,14 +80,14 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
         actingAs(ADMIN);
 
         // When
-        RestTestClient.ResponseSpec response = updateStatus(questionId, "ACTIVE");
+        RestTestClient.ResponseSpec response = updateStatus(questionId, "SUBMITTED");
 
         // Then
         response
                 .expectStatus().isEqualTo(HttpStatus.CONFLICT)
                 .expectBody()
                 .jsonPath("$.message")
-                .isEqualTo("A question can't be active while these concepts are drafts: java-records");
+                .isEqualTo("A question can't be submitted while these concepts are drafts: java-records");
 
         assertEquals(QuestionStatus.DRAFT, findQuestionById(questionId).getStatus());
     }
@@ -95,14 +95,14 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
     @ParameterizedTest(name = "to {0}")
     @EnumSource(value = QuestionStatus.class, names = {"DRAFT", "RETIRED"})
     @DisplayName("""
-            Given an active question linked to a concept that is still a draft
+            Given a submitted question linked to a concept that is still a draft
             When an admin sends the question back to DRAFT or retires it
-            Then the status is changed, since only going live requires approved concepts
+            Then the status is changed, since only submitting requires published concepts
             """)
-    void updateQuestionStatusReturnsOkWhenLeavingActiveWithDraftConcept(QuestionStatus target) {
+    void updateQuestionStatusReturnsOkWhenLeavingSubmittedWithDraftConcept(QuestionStatus target) {
         // Given
         insertConcept("java-records", ConceptStatus.DRAFT);
-        Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-records");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-records");
         actingAs(ADMIN);
 
         // When
@@ -117,22 +117,22 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
     @Test
     @DisplayName("""
             Given a draft question linked to a retired concept
-            When an admin sets the question status to ACTIVE
-            Then the status is changed, since only draft concepts block activation
+            When an admin sets the question status to SUBMITTED
+            Then the status is changed, since only draft concepts block submitting
             """)
-    void updateQuestionStatusReturnsOkWhenActivatingWithRetiredConcept() {
+    void updateQuestionStatusReturnsOkWhenSubmittingWithRetiredConcept() {
         // Given
         insertConcept("java-core", ConceptStatus.RETIRED);
         Long questionId = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
         actingAs(ADMIN);
 
         // When
-        RestTestClient.ResponseSpec response = updateStatus(questionId, "ACTIVE");
+        RestTestClient.ResponseSpec response = updateStatus(questionId, "SUBMITTED");
 
         // Then
         response.expectStatus().isOk();
 
-        assertEquals(QuestionStatus.ACTIVE, findQuestionById(questionId).getStatus());
+        assertEquals(QuestionStatus.SUBMITTED, findQuestionById(questionId).getStatus());
     }
 
     @Test
@@ -148,7 +148,7 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
         actingAs(AUTHOR);
 
         // When
-        RestTestClient.ResponseSpec response = updateStatus(questionId, "ACTIVE");
+        RestTestClient.ResponseSpec response = updateStatus(questionId, "SUBMITTED");
 
         // Then
         response.expectStatus().isForbidden();
@@ -167,7 +167,7 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
         actingAs(AUTHOR);
 
         // When
-        RestTestClient.ResponseSpec response = updateStatus(999_999L, "ACTIVE");
+        RestTestClient.ResponseSpec response = updateStatus(999_999L, "SUBMITTED");
 
         // Then
         response.expectStatus().isNotFound();

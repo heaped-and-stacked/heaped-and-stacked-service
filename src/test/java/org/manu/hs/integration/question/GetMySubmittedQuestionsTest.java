@@ -30,7 +30,7 @@ class GetMySubmittedQuestionsTest extends AbstractIntegrationTest {
         insertConcept("java-core");
         Long olderDraft = insertQuestion(QuestionStatus.DRAFT, AUTHOR, "java-core");
         insertQuestion(QuestionStatus.DRAFT, OTHER_USER, "java-core");
-        Long active = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
+        Long active = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
         Long newestRetired = insertQuestion(QuestionStatus.RETIRED, AUTHOR, "java-core");
         actingAs(AUTHOR);
 

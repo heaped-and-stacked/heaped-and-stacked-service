@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.Nulls;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.manu.hs.domain.concept.ContributionPolicy;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -20,4 +21,5 @@ public class CreateConceptRequest {
     private String description;
     @JsonSetter(nulls = Nulls.AS_EMPTY)
     private List<String> externalReferences = new ArrayList<>();
+    private ContributionPolicy contributionPolicy;
 }

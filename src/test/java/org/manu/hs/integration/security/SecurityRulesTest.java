@@ -41,6 +41,26 @@ class SecurityRulesTest extends AbstractIntegrationTest {
     @Test
     @DisplayName("""
             Given a visitor who is not signed in
+            When they ask for questions to train on
+            Then an unauthorized response is returned, as learning requires signing in for now
+            """)
+    void learningReturnsUnauthorizedWhenVisitor() {
+        // Given
+        actingAsVisitor();
+
+        // When
+        RestTestClient.ResponseSpec response = restClient
+                .get()
+                .uri("/learning/questions/next")
+                .exchange();
+
+        // Then
+        response.expectStatus().isUnauthorized();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a visitor who is not signed in
             When they submit a question
             Then an unauthorized response is returned, as contributing requires signing in
             """)
@@ -123,6 +143,33 @@ class SecurityRulesTest extends AbstractIntegrationTest {
 
         // Then
         response.expectStatus().isUnauthorized();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a visitor who is not signed in and API docs are enabled
+            When they request the OpenAPI description
+            Then it is returned, names the API and describes its endpoints,
+            without asking clients for the CSRF token the server injects itself
+            """)
+    void apiDocsAreServedToVisitorsWhenEnabled() {
+        // Given
+        actingAsVisitor();
+
+        // When
+        RestTestClient.ResponseSpec response = restClient
+                .get()
+                .uri("/v3/api-docs")
+                .exchange();
+
+        // Then
+        response
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.info.title").isEqualTo("Heaped & Stacked API")
+                .jsonPath("$.paths['/content/concepts']").exists()
+                .jsonPath("$.paths['/users/me']").exists()
+                .jsonPath("$.paths['/csrf'].get.parameters").doesNotExist();
     }
 
     @Test

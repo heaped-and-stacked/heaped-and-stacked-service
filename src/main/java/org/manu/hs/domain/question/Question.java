@@ -17,11 +17,10 @@ public class Question {
 
     private Long id;
     private List<String> conceptTags;
+    private String title;
     private String requirement;
     private String sampleSolution;
-    private QuestionType type;
     private int difficultyScore;
-    private int expectedDurationMinutes;
     private QuestionStatus status;
     private String source;
     private Long createdBy;

@@ -66,14 +66,14 @@ class UpdateConceptStatusTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
-            Given an active concept linked to an active question
+            Given an active concept linked to a submitted question
             When an admin sends the concept back to DRAFT
             Then a conflict is returned and the concept stays active
             """)
     void updateConceptStatusReturnsConflictWhenActiveQuestionUsesItAndTargetIsDraft() {
         // Given
         insertConcept("java-core");
-        insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
+        insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
         actingAs(ADMIN);
 
         // When
@@ -84,21 +84,21 @@ class UpdateConceptStatusTest extends AbstractIntegrationTest {
                 .expectStatus().isEqualTo(HttpStatus.CONFLICT)
                 .expectBody()
                 .jsonPath("$.message")
-                .isEqualTo("Concept 'java-core' can't go back to draft while active questions use it");
+                .isEqualTo("Concept 'java-core' can't go back to draft while submitted questions use it");
 
         assertEquals(ConceptStatus.ACTIVE, findConceptByTag("java-core").getStatus());
     }
 
     @Test
     @DisplayName("""
-            Given an active concept linked to an active question
+            Given an active concept linked to a submitted question
             When an admin retires the concept
-            Then the status is changed, since only drafts are hidden from active questions
+            Then the status is changed, since only drafts are hidden from submitted questions
             """)
     void updateConceptStatusReturnsOkWhenRetiringConceptUsedByActiveQuestion() {
         // Given
         insertConcept("java-core");
-        insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
+        insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
         actingAs(ADMIN);
 
         // When
@@ -114,7 +114,7 @@ class UpdateConceptStatusTest extends AbstractIntegrationTest {
     @DisplayName("""
             Given an active concept linked only to a draft question
             When an admin sends the concept back to DRAFT
-            Then the status is changed, since only active questions block it
+            Then the status is changed, since only submitted questions block it
             """)
     void updateConceptStatusReturnsOkWhenOnlyDraftQuestionsUseIt() {
         // Given
@@ -133,14 +133,64 @@ class UpdateConceptStatusTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
-            Given the caller is not an admin, even though they are the author
-            When a PUT request is sent to the concept status endpoint
-            Then a forbidden response is returned and the status is unchanged
+            Given the owner of a draft concept
+            When they set its status to ACTIVE
+            Then the concept is published with HTTP 200, without any review
             """)
-    void updateConceptStatusReturnsForbiddenWhenCallerIsNotAdmin() {
+    void updateConceptStatusReturnsOkWhenOwnerPublishesDraft() {
         // Given
         insertConcept("java-core", ConceptStatus.DRAFT);
         actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus("java-core", "ACTIVE");
+
+        // Then
+        response.expectStatus().isOk();
+
+        assertEquals(ConceptStatus.ACTIVE, findConceptByTag("java-core").getStatus());
+        assertEquals(AUTHOR, findConceptByTag("java-core").getUpdatedBy());
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource({
+            "ACTIVE, DRAFT",
+            "ACTIVE, RETIRED",
+            "DRAFT,  RETIRED"
+    })
+    @DisplayName("""
+            Given the owner of a concept, who is not an admin
+            When they set any status other than ACTIVE
+            Then a forbidden response is returned, as only admins unpublish or retire concepts
+            """)
+    void updateConceptStatusReturnsForbiddenWhenOwnerDoesMoreThanPublish(ConceptStatus from, ConceptStatus to) {
+        // Given
+        insertConcept("java-core", from);
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus("java-core", to.name());
+
+        // Then
+        response
+                .expectStatus().isForbidden()
+                .expectBody()
+                .jsonPath("$.message")
+                .isEqualTo("Only an admin may unpublish or retire a concept");
+
+        assertEquals(from, findConceptByTag("java-core").getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a draft concept owned by someone else, and a caller who is not an admin
+            When they set its status to ACTIVE
+            Then a forbidden response is returned and the concept stays a draft
+            """)
+    void updateConceptStatusReturnsForbiddenWhenCallerIsNotOwner() {
+        // Given
+        insertConcept("java-core", ConceptStatus.DRAFT);
+        actingAs(OTHER_USER);
 
         // When
         RestTestClient.ResponseSpec response = updateStatus("java-core", "ACTIVE");
@@ -175,13 +225,13 @@ class UpdateConceptStatusTest extends AbstractIntegrationTest {
     @Test
     @DisplayName("""
             Given a payload without a status
-            When an admin sends a PUT request to the concept status endpoint
+            When the owner sends a PUT request to the concept status endpoint
             Then a bad request is returned and the status is unchanged
             """)
     void updateConceptStatusReturnsBadRequestWhenStatusIsMissing() {
         // Given
         insertConcept("java-core", ConceptStatus.DRAFT);
-        actingAs(ADMIN);
+        actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = restClient

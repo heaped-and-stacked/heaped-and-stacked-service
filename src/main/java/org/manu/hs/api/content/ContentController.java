@@ -5,6 +5,8 @@ import org.manu.hs.api.content.dto.ConceptResponse;
 import org.manu.hs.api.content.dto.CreateConceptRequest;
 import org.manu.hs.api.content.dto.CreateQuestionRequest;
 import org.manu.hs.api.content.dto.QuestionResponse;
+import org.manu.hs.api.content.dto.ReviewDecisionRequest;
+import org.manu.hs.api.content.dto.ReviewResponse;
 import org.manu.hs.api.content.dto.UpdateConceptRequest;
 import org.manu.hs.api.content.dto.UpdateConceptStatusRequest;
 import org.manu.hs.api.content.dto.UpdateQuestionRequest;
@@ -15,9 +17,7 @@ import org.manu.hs.application.content.command.SubmitQuestionCommand;
 import org.manu.hs.application.content.command.UpdateConceptCommand;
 import org.manu.hs.application.content.command.UpdateQuestionCommand;
 import org.manu.hs.domain.concept.Concept;
-import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.question.Question;
-import org.manu.hs.domain.question.QuestionStatus;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -26,7 +26,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -76,12 +75,6 @@ public class ContentController {
         return applicationFacade.getConcepts().stream().map(ConceptResponse::toDto).toList();
     }
 
-    @GetMapping("/concepts/review")
-    @ResponseStatus(HttpStatus.OK)
-    public List<ConceptResponse> getConceptsForReview(@RequestParam(required = false) ConceptStatus status) {
-        return applicationFacade.getConceptsForReview(status).stream().map(ConceptResponse::toDto).toList();
-    }
-
     // ---------------------------------------------------------------------
     // Questions
     // ---------------------------------------------------------------------
@@ -119,10 +112,23 @@ public class ContentController {
         return applicationFacade.getMySubmittedQuestions().stream().map(QuestionResponse::toDto).toList();
     }
 
-    @GetMapping("/questions/review")
+    // ---------------------------------------------------------------------
+    // Reviews
+    // ---------------------------------------------------------------------
+
+    @GetMapping("/reviews")
     @ResponseStatus(HttpStatus.OK)
-    public List<QuestionResponse> getQuestionsForReview(@RequestParam(required = false) QuestionStatus status) {
-        return applicationFacade.getQuestionsForReview(status).stream().map(QuestionResponse::toDto).toList();
+    public List<ReviewResponse> getReviews() {
+        return applicationFacade.getReviews().stream().map(ReviewResponse::toDto).toList();
+    }
+
+    @PutMapping("/questions/{id}/concepts/{tag}/review")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void reviewQuestion(
+            @PathVariable Long id,
+            @PathVariable String tag,
+            @RequestBody ReviewDecisionRequest request) {
+        applicationFacade.reviewQuestion(id, tag, request.getStatus());
     }
 
     // ---------------------------------------------------------------------
@@ -135,6 +141,7 @@ public class ContentController {
                 .name(request.getName())
                 .description(request.getDescription())
                 .externalReferences(request.getExternalReferences())
+                .contributionPolicy(request.getContributionPolicy())
                 .build();
     }
 
@@ -143,16 +150,16 @@ public class ContentController {
                 .name(request.getName())
                 .description(request.getDescription())
                 .externalReferences(request.getExternalReferences())
+                .contributionPolicy(request.getContributionPolicy())
                 .build();
     }
 
     private SubmitQuestionCommand toCommand(CreateQuestionRequest request) {
         return SubmitQuestionCommand.builder()
+                .title(request.getTitle())
                 .requirement(request.getRequirement())
                 .sampleSolution(request.getSampleSolution())
-                .type(request.getType())
                 .difficultyScore(request.getDifficultyScore())
-                .expectedDurationMinutes(request.getExpectedDurationMinutes())
                 .source(request.getSource())
                 .conceptTags(request.getConceptTags())
                 .build();
@@ -160,11 +167,10 @@ public class ContentController {
 
     private UpdateQuestionCommand toCommand(UpdateQuestionRequest request) {
         return UpdateQuestionCommand.builder()
+                .title(request.getTitle())
                 .requirement(request.getRequirement())
                 .sampleSolution(request.getSampleSolution())
-                .type(request.getType())
                 .difficultyScore(request.getDifficultyScore())
-                .expectedDurationMinutes(request.getExpectedDurationMinutes())
                 .source(request.getSource())
                 .conceptTags(request.getConceptTags())
                 .build();

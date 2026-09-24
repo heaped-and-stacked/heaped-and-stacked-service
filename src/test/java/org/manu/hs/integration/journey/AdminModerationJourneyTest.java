@@ -23,15 +23,15 @@ class AdminModerationJourneyTest extends AbstractIntegrationTest {
     @DisplayName("""
             Given the platform owner (a bootstrap admin) and a member, both signed in
             When the owner promotes the member
-            Then the member is signed out, and after signing in again can open the review queue
+            Then the member is signed out, and after signing in again can open the user administration
             """)
-    void bootstrapAdminPromotesMemberWhoThenReviews() {
+    void bootstrapAdminPromotesMemberWhoThenAdministers() {
         // Given
         RestTestClient ownersBrowser = signInWithGitHub(BOOTSTRAP_ADMIN_GITHUB_ID, "the-owner");
         RestTestClient membersBrowser = signInWithGitHub("5001", "future-admin");
         Long memberId = findIdentity(AuthProvider.GITHUB, "5001").getUserId();
 
-        membersBrowser.get().uri("/content/questions/review").exchange()
+        membersBrowser.get().uri("/admin/users").exchange()
                 .expectStatus().isForbidden();
 
         // When: the owner promotes the member
@@ -49,7 +49,7 @@ class AdminModerationJourneyTest extends AbstractIntegrationTest {
 
         // ...and once they sign in again, they have admin rights
         RestTestClient membersNewBrowser = signInWithGitHub("5001", "future-admin");
-        membersNewBrowser.get().uri("/content/questions/review").exchange()
+        membersNewBrowser.get().uri("/admin/users").exchange()
                 .expectStatus().isOk();
     }
 

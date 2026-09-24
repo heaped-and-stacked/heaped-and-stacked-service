@@ -8,6 +8,8 @@ import org.manu.hs.application.content.command.UpdateConceptCommand;
 import org.manu.hs.application.content.command.UpdateQuestionCommand;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.question.ConceptLink;
+import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionStatus;
 import org.springframework.stereotype.Service;
@@ -42,13 +44,13 @@ public class ContentApplication {
         conceptService.validate(command);
         conceptService.requireTagAvailable(command.getTag());
 
-        final ConceptStatus status = userProvider.isAdmin() ? ConceptStatus.ACTIVE : ConceptStatus.DRAFT;
-        return conceptService.create(command, status, userProvider.userId());
+        // Concepts are published straight away and owned by their author; no review needed.
+        return conceptService.create(command, ConceptStatus.ACTIVE, userProvider.userId());
     }
 
     public void deleteConcept(String tag) {
         final Concept existing = conceptService.findByTagOrThrow(tag);
-        conceptService.requireCanBeModifiedBy(existing, userProvider.userId(), userProvider.isAdmin());
+        conceptService.requireCanBeDeletedBy(existing, userProvider.userId(), userProvider.isAdmin());
         conceptService.requireNotInUse(tag);
 
         conceptService.delete(tag);
@@ -59,13 +61,18 @@ public class ContentApplication {
         conceptService.requireCanBeModifiedBy(existing, userProvider.userId(), userProvider.isAdmin());
         conceptService.validate(command);
 
-        return conceptService.update(tag, command, userProvider.userId());
+        return conceptService.update(existing, command, userProvider.userId());
     }
 
+    /**
+     * The owner publishes their concept (ACTIVE); admins may set any status. Checks run
+     * 404, 403 (owner or admin), 400, 403 (owners only publish), 409.
+     */
     public Concept updateConceptStatus(String tag, ConceptStatus newStatus) {
-        conceptService.findByTagOrThrow(tag);
-        userProvider.requireAdmin("change the status of a concept");
+        final Concept existing = conceptService.findByTagOrThrow(tag);
+        conceptService.requireCanBeModifiedBy(existing, userProvider.userId(), userProvider.isAdmin());
         requireNonNull(newStatus, "status");
+        conceptService.requireCanChangeStatusTo(newStatus, userProvider.isAdmin());
         conceptService.requireCanMoveTo(tag, newStatus);
 
         return conceptService.updateStatus(tag, newStatus, userProvider.userId());
@@ -73,13 +80,6 @@ public class ContentApplication {
 
     public List<Concept> getConcepts() {
         return conceptService.findAll();
-    }
-
-    public List<Concept> getConceptsForReview(ConceptStatus statusFilter) {
-        userProvider.requireAdmin("view the concept review queue");
-
-        final ConceptStatus status = statusFilter == null ? ConceptStatus.DRAFT : statusFilter;
-        return conceptService.findByStatus(status);
     }
 
     // ---------------------------------------------------------------------
@@ -90,13 +90,11 @@ public class ContentApplication {
         questionService.validate(command);
 
         final List<Concept> concepts = conceptService.findByTagsOrThrow(command.getConceptTags());
+        // Questions are submitted straight away; drafts aren't offered yet.
+        questionService.requireNoDraftConcepts(concepts);
 
-        final QuestionStatus status = userProvider.isAdmin() ? QuestionStatus.ACTIVE : QuestionStatus.DRAFT;
-        if (status == QuestionStatus.ACTIVE) {
-            questionService.requireNoDraftConcepts(concepts);
-        }
-
-        return questionService.create(command, status, userProvider.userId());
+        final List<String> awaitingApproval = questionService.tagsAwaitingApproval(concepts, userProvider.userId());
+        return questionService.create(command, QuestionStatus.SUBMITTED, userProvider.userId(), awaitingApproval);
     }
 
     public Question updateQuestion(Long id, UpdateQuestionCommand command) {
@@ -106,11 +104,13 @@ public class ContentApplication {
 
         final List<Concept> concepts = conceptService.findByTagsOrThrow(command.getConceptTags());
 
-        if (existing.getStatus() == QuestionStatus.ACTIVE) {
+        if (existing.getStatus() == QuestionStatus.SUBMITTED) {
             questionService.requireNoDraftConcepts(concepts);
         }
 
-        return questionService.update(existing, command, userProvider.userId());
+        // Whether a new link waits depends on the question's author, not on who edits it.
+        final List<String> awaitingApproval = questionService.tagsAwaitingApproval(concepts, existing.getCreatedBy());
+        return questionService.update(existing, command, userProvider.userId(), awaitingApproval);
     }
 
     public Question updateQuestionStatus(Long id, QuestionStatus newStatus) {
@@ -118,7 +118,7 @@ public class ContentApplication {
         userProvider.requireAdmin("change the status of a question");
         requireNonNull(newStatus, "status");
 
-        if (newStatus == QuestionStatus.ACTIVE) {
+        if (newStatus == QuestionStatus.SUBMITTED) {
             questionService.requireNoDraftConcepts(conceptService.findByTags(existing.getConceptTags()));
         }
 
@@ -127,7 +127,8 @@ public class ContentApplication {
 
     public void deleteQuestion(Long id) {
         final Question existing = questionService.findByIdOrThrow(id);
-        questionService.requireCanBeModifiedBy(existing, userProvider.userId(), userProvider.isAdmin());
+        questionService.requireCanBeDeletedBy(existing, userProvider.userId(), userProvider.isAdmin());
+        questionService.requireNotAnswered(id);
 
         questionService.delete(id);
     }
@@ -136,10 +137,26 @@ public class ContentApplication {
         return questionService.findBySubmittedBy(userProvider.userId());
     }
 
-    public List<Question> getQuestionsForReview(QuestionStatus statusFilter) {
-        userProvider.requireAdmin("view the review queue");
+    // ---------------------------------------------------------------------
+    // Reviews: a concept's owner decides which contributed questions it accepts
+    // ---------------------------------------------------------------------
 
-        final QuestionStatus status = statusFilter == null ? QuestionStatus.DRAFT : statusFilter;
-        return questionService.findByStatus(status);
+    /** Questions waiting on the caller's own concepts; admins see those on every concept. */
+    public List<ConceptLink> getReviews() {
+        return questionService.findLinksAwaitingReview(userProvider.userId(), userProvider.isAdmin());
+    }
+
+    /**
+     * The concept's owner (or an admin) accepts or declines a question for that concept only.
+     * A decision can be changed later, for example to decline a duplicate that was accepted.
+     */
+    public void reviewQuestion(Long questionId, String conceptTag, ConceptLinkStatus decision) {
+        final Question question = questionService.findByIdOrThrow(questionId);
+        questionService.requireLinkedTo(question, conceptTag);
+        final Concept concept = conceptService.findByTagOrThrow(conceptTag);
+        conceptService.requireCanBeModifiedBy(concept, userProvider.userId(), userProvider.isAdmin());
+        questionService.validateReviewDecision(decision);
+
+        questionService.decide(questionId, conceptTag, decision, userProvider.userId());
     }
 }

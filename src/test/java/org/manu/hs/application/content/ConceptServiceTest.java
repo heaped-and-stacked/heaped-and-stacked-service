@@ -8,6 +8,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.manu.hs.application.common.exception.AdminRequiredException;
+import org.manu.hs.application.common.exception.base.ForbiddenException;
 import org.manu.hs.application.common.exception.base.ValidationException;
 import org.manu.hs.application.content.command.CreateConceptCommand;
 import org.manu.hs.application.content.command.UpdateConceptCommand;
@@ -17,6 +19,7 @@ import org.manu.hs.application.content.exception.UnknownConceptTagException;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptRepository;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.concept.ContributionPolicy;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,7 +27,6 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.Mockito.mock;
@@ -162,6 +164,37 @@ class ConceptServiceTest {
     @CsvSource(textBlock = """
             # caller,    admin, status,  allowed
             1001,        false, DRAFT,   true
+            1001,        false, ACTIVE,  true
+            1001,        false, RETIRED, true
+            1002,        false, DRAFT,   false
+            1002,        false, ACTIVE,  false
+            1002,        false, RETIRED, false
+            1003,        true,  DRAFT,   true
+            1003,        true,  ACTIVE,  true
+            1003,        true,  RETIRED, true
+            """)
+    @DisplayName("""
+            Given a concept owned by its author, in a given status
+            When a caller wants to change it
+            Then only the owner or an admin is allowed, in any status
+            """)
+    void requireCanBeModifiedByAllowsOwnerOrAnyAdmin(Long caller, boolean admin, ConceptStatus status, boolean allowed) {
+        // Given
+        Concept concept = Concept.builder().tag("java-core").status(status).createdBy(1001L).build();
+
+        // When / Then
+        if (allowed) {
+            assertDoesNotThrow(() -> conceptService.requireCanBeModifiedBy(concept, caller, admin));
+        } else {
+            assertThrows(ConceptModificationForbiddenException.class,
+                    () -> conceptService.requireCanBeModifiedBy(concept, caller, admin));
+        }
+    }
+
+    @ParameterizedTest(name = "{0} (admin: {1}) on a {2} concept -> allowed: {3}")
+    @CsvSource(textBlock = """
+            # caller,    admin, status,  allowed
+            1001,        false, DRAFT,   true
             1001,        false, ACTIVE,  false
             1001,        false, RETIRED, false
             1002,        false, DRAFT,   false
@@ -172,20 +205,46 @@ class ConceptServiceTest {
             1003,        true,  RETIRED, true
             """)
     @DisplayName("""
-            Given a concept written by an author, in a given status
-            When a caller wants to modify it
-            Then only the author of a DRAFT, or an admin in any status, is allowed
+            Given a concept owned by its author, in a given status
+            When a caller wants to delete it
+            Then only the owner of a DRAFT, or an admin in any status, is allowed
             """)
-    void requireCanBeModifiedByAllowsAuthorOfDraftOrAnyAdmin(Long caller, boolean admin, ConceptStatus status, boolean allowed) {
+    void requireCanBeDeletedByAllowsOwnerOfDraftOrAnyAdmin(Long caller, boolean admin, ConceptStatus status, boolean allowed) {
         // Given
         Concept concept = Concept.builder().tag("java-core").status(status).createdBy(1001L).build();
 
         // When / Then
         if (allowed) {
-            assertDoesNotThrow(() -> conceptService.requireCanBeModifiedBy(concept, caller, admin));
+            assertDoesNotThrow(() -> conceptService.requireCanBeDeletedBy(concept, caller, admin));
         } else {
-            assertThrows(ConceptModificationForbiddenException.class,
-                    () -> conceptService.requireCanBeModifiedBy(concept, caller, admin));
+            assertThrows(ForbiddenException.class,
+                    () -> conceptService.requireCanBeDeletedBy(concept, caller, admin));
+        }
+    }
+
+    @ParameterizedTest(name = "to {0} (admin: {1}) -> allowed: {2}")
+    @CsvSource(textBlock = """
+            # target,  admin, allowed
+            ACTIVE,    false, true
+            DRAFT,     false, false
+            RETIRED,   false, false
+            ACTIVE,    true,  true
+            DRAFT,     true,  true
+            RETIRED,   true,  true
+            """)
+    @DisplayName("""
+            Given the owner or an admin changing a concept's status
+            When the target status is checked
+            Then owners may only publish (ACTIVE); unpublishing and retiring are for admins
+            """)
+    void requireCanChangeStatusToAllowsOwnersOnlyToPublish(ConceptStatus target, boolean admin, boolean allowed) {
+        // When / Then
+        if (allowed) {
+            assertDoesNotThrow(() -> conceptService.requireCanChangeStatusTo(target, admin));
+        } else {
+            AdminRequiredException exception = assertThrows(AdminRequiredException.class,
+                    () -> conceptService.requireCanChangeStatusTo(target, admin));
+            assertEquals("Only an admin may unpublish or retire a concept", exception.getMessage());
         }
     }
 
@@ -212,6 +271,26 @@ class ConceptServiceTest {
         assertEquals("Fundamentals of Java", concept.getDescription());
         assertEquals(List.of("https://dev.java/learn/"), concept.getExternalReferences());
         assertEquals(ConceptStatus.DRAFT, concept.getStatus());
+        assertEquals(ContributionPolicy.AUTO_ACCEPT, concept.getContributionPolicy());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a new concept command that sets a contribution policy
+            When the concept to store is built
+            Then it carries that policy instead of the default
+            """)
+    void newConceptTakesContributionPolicyFromCommand() {
+        // Given
+        CreateConceptCommand command = aCreateCommand()
+                .contributionPolicy(ContributionPolicy.OWNER_APPROVAL)
+                .build();
+
+        // When
+        Concept concept = conceptService.newConcept(command, ConceptStatus.ACTIVE);
+
+        // Then
+        assertEquals(ContributionPolicy.OWNER_APPROVAL, concept.getContributionPolicy());
     }
 
     @Test
@@ -235,12 +314,15 @@ class ConceptServiceTest {
 
     @Test
     @DisplayName("""
-            Given a concept edit
+            Given an edit that leaves the contribution policy out
             When the edited concept is built
-            Then it takes the tag from the path and carries no status, since an edit never changes it
+            Then it takes the new content and keeps the stored tag, status and policy
             """)
-    void updatedConceptUsesPathTagAndNoStatus() {
+    void updatedConceptKeepsTagStatusAndPolicyWhenPolicyOmitted() {
         // Given
+        Concept existing = aConcept("java-core").toBuilder()
+                .contributionPolicy(ContributionPolicy.OWNER_APPROVAL)
+                .build();
         UpdateConceptCommand command = UpdateConceptCommand.builder()
                 .name("Advanced Java Core")
                 .description("Revisited")
@@ -248,12 +330,36 @@ class ConceptServiceTest {
                 .build();
 
         // When
-        Concept concept = conceptService.updatedConcept("java-core", command);
+        Concept concept = conceptService.updatedConcept(existing, command);
 
         // Then
         assertEquals("java-core", concept.getTag());
         assertEquals("Advanced Java Core", concept.getName());
-        assertNull(concept.getStatus());
+        assertEquals(ConceptStatus.ACTIVE, concept.getStatus());
+        assertEquals(ContributionPolicy.OWNER_APPROVAL, concept.getContributionPolicy());
+    }
+
+    @Test
+    @DisplayName("""
+            Given an edit that sets a contribution policy
+            When the edited concept is built
+            Then it carries the new policy
+            """)
+    void updatedConceptTakesContributionPolicyFromCommandWhenGiven() {
+        // Given
+        Concept existing = aConcept("java-core");
+        UpdateConceptCommand command = UpdateConceptCommand.builder()
+                .name("Java Core")
+                .description("Fundamentals")
+                .externalReferences(List.of())
+                .contributionPolicy(ContributionPolicy.OWNER_APPROVAL)
+                .build();
+
+        // When
+        Concept concept = conceptService.updatedConcept(existing, command);
+
+        // Then
+        assertEquals(ContributionPolicy.OWNER_APPROVAL, concept.getContributionPolicy());
     }
 
     private static CreateConceptCommand.CreateConceptCommandBuilder aCreateCommand() {
@@ -265,6 +371,10 @@ class ConceptServiceTest {
     }
 
     private static Concept aConcept(String tag) {
-        return Concept.builder().tag(tag).status(ConceptStatus.ACTIVE).build();
+        return Concept.builder()
+                .tag(tag)
+                .status(ConceptStatus.ACTIVE)
+                .contributionPolicy(ContributionPolicy.AUTO_ACCEPT)
+                .build();
     }
 }

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.manu.hs.api.content.dto.ConceptResponse;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.concept.ContributionPolicy;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.client.RestTestClient;
@@ -149,11 +150,11 @@ class UpdateConceptTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
-            Given the author of a concept that is no longer a draft
-            When they send a PUT request
-            Then a forbidden response is returned and the concept is unchanged
+            Given the owner of a concept that is already published
+            When they send a PUT request with a valid payload
+            Then the concept is updated with HTTP 200, as owners may keep improving their concepts
             """)
-    void updateConceptReturnsForbiddenWhenAuthorEditsNonDraftConcept() {
+    void updateConceptReturnsOkWhenOwnerEditsPublishedConcept() {
         // Given
         insertConcept("java-core", ConceptStatus.ACTIVE);
         actingAs(AUTHOR);
@@ -161,15 +162,71 @@ class UpdateConceptTest extends AbstractIntegrationTest {
         // When
         RestTestClient.ResponseSpec response = update("java-core", """
                 {
-                    "name": "Attempted rename",
-                    "description": "Attempted description"
+                    "name": "Java Core, reworded",
+                    "description": "Clearer description"
                 }
                 """);
 
         // Then
-        response.expectStatus().isForbidden();
+        response.expectStatus().isOk();
 
-        assertEquals("Name of java-core", findConceptByTag("java-core").getName());
+        assertEquals("Java Core, reworded", findConceptByTag("java-core").getName());
+        assertEquals(ConceptStatus.ACTIVE, findConceptByTag("java-core").getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given the owner of a concept that accepts contributed questions automatically
+            When they send a PUT request setting the contribution policy to OWNER_APPROVAL
+            Then the policy is changed and returned with HTTP 200
+            """)
+    void updateConceptChangesContributionPolicyWhenGiven() {
+        // Given
+        insertConcept("java-core", ConceptStatus.ACTIVE);
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = update("java-core", """
+                {
+                    "name": "Java Core",
+                    "description": "Fundamentals",
+                    "contributionPolicy": "OWNER_APPROVAL"
+                }
+                """);
+
+        // Then
+        response
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.contributionPolicy").isEqualTo("OWNER_APPROVAL");
+
+        assertEquals(ContributionPolicy.OWNER_APPROVAL, findConceptByTag("java-core").getContributionPolicy());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a concept whose owner approves contributed questions
+            When a PUT request leaves the contribution policy out
+            Then the concept keeps its policy
+            """)
+    void updateConceptKeepsContributionPolicyWhenOmitted() {
+        // Given
+        insertConcept("java-core", ConceptStatus.ACTIVE);
+        setContributionPolicy("java-core", ContributionPolicy.OWNER_APPROVAL);
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = update("java-core", """
+                {
+                    "name": "Java Core, reworded",
+                    "description": "Clearer description"
+                }
+                """);
+
+        // Then
+        response.expectStatus().isOk();
+
+        assertEquals(ContributionPolicy.OWNER_APPROVAL, findConceptByTag("java-core").getContributionPolicy());
     }
 
     @Test

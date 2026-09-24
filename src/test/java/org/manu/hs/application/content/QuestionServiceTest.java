@@ -7,6 +7,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.manu.hs.application.common.exception.base.ForbiddenException;
 import org.manu.hs.application.common.exception.base.ValidationException;
 import org.manu.hs.application.content.command.SubmitQuestionCommand;
 import org.manu.hs.application.content.command.UpdateQuestionCommand;
@@ -14,10 +15,11 @@ import org.manu.hs.application.content.exception.QuestionHasDraftConceptsExcepti
 import org.manu.hs.application.content.exception.QuestionModificationForbiddenException;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.concept.ContributionPolicy;
+import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionRepository;
 import org.manu.hs.domain.question.QuestionStatus;
-import org.manu.hs.domain.question.QuestionType;
 
 import java.time.Instant;
 import java.util.List;
@@ -67,15 +69,15 @@ class QuestionServiceTest {
 
     static Stream<Arguments> invalidCommands() {
         return Stream.of(
+                arguments("title is null", aSubmitCommand().title(null).build(), "title is required"),
+                arguments("title is blank", aSubmitCommand().title("   ").build(), "title is required"),
+                arguments("title is too long", aSubmitCommand().title("x".repeat(121)).build(), "title must be at most 120 characters"),
                 arguments("requirement is null", aSubmitCommand().requirement(null).build(), "requirement is required"),
                 arguments("requirement is blank", aSubmitCommand().requirement("   ").build(), "requirement is required"),
                 arguments("sampleSolution is null", aSubmitCommand().sampleSolution(null).build(), "sampleSolution is required"),
-                arguments("type is null", aSubmitCommand().type(null).build(), "type is required"),
                 arguments("difficultyScore is null", aSubmitCommand().difficultyScore(null).build(), "difficultyScore is required"),
                 arguments("difficultyScore is 0", aSubmitCommand().difficultyScore(0).build(), "difficultyScore must be between 1 and 10"),
                 arguments("difficultyScore is 11", aSubmitCommand().difficultyScore(11).build(), "difficultyScore must be between 1 and 10"),
-                arguments("expectedDurationMinutes is null", aSubmitCommand().expectedDurationMinutes(null).build(), "expectedDurationMinutes is required"),
-                arguments("expectedDurationMinutes is 0", aSubmitCommand().expectedDurationMinutes(0).build(), "expectedDurationMinutes must be greater than 0"),
                 arguments("conceptTags is null", aSubmitCommand().conceptTags(null).build(), "conceptTags is required"),
                 arguments("conceptTags is empty", aSubmitCommand().conceptTags(List.of()).build(), "conceptTags is required"));
     }
@@ -112,29 +114,61 @@ class QuestionServiceTest {
         assertEquals("difficultyScore must be between 1 and 10", exception.getMessage());
     }
 
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(textBlock = """
+            # decision, expected message
+            ,           status is required
+            PENDING,    status must be ACCEPTED or DECLINED
+            """)
+    @DisplayName("""
+            Given a review decision that is missing or isn't a decision
+            When it is validated
+            Then it is refused, as a review either accepts or declines
+            """)
+    void validateReviewDecisionRejectsAnythingButAcceptOrDecline(ConceptLinkStatus decision, String expectedMessage) {
+        // When
+        ValidationException exception = assertThrows(ValidationException.class,
+                () -> questionService.validateReviewDecision(decision));
+
+        // Then
+        assertEquals(expectedMessage, exception.getMessage());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"ACCEPTED", "DECLINED"})
+    @DisplayName("""
+            Given a review that accepts or declines
+            When it is validated
+            Then it is allowed
+            """)
+    void validateReviewDecisionAllowsAcceptAndDecline(ConceptLinkStatus decision) {
+        // When / Then
+        assertDoesNotThrow(() -> questionService.validateReviewDecision(decision));
+    }
+
     // ---------------------------------------------------------------------
     // Rules
     // ---------------------------------------------------------------------
 
     @ParameterizedTest(name = "{0} (admin: {1}) on a {2} question -> allowed: {3}")
     @CsvSource(textBlock = """
-            # caller,    admin, status,  allowed
-            1001,        false, DRAFT,   true
-            1001,        false, ACTIVE,  false
-            1001,        false, RETIRED, false
-            1002,        false, DRAFT,   false
-            1002,        false, ACTIVE,  false
-            1002,        false, RETIRED, false
-            1003,        true,  DRAFT,   true
-            1003,        true,  ACTIVE,  true
-            1003,        true,  RETIRED, true
+            # caller,    admin, status,    allowed
+            1001,        false, DRAFT,     true
+            1001,        false, SUBMITTED, true
+            1001,        false, RETIRED,   true
+            1002,        false, DRAFT,     false
+            1002,        false, SUBMITTED, false
+            1002,        false, RETIRED,   false
+            1003,        true,  DRAFT,     true
+            1003,        true,  SUBMITTED, true
+            1003,        true,  RETIRED,   true
             """)
     @DisplayName("""
             Given a question written by an author, in a given status
-            When a caller wants to modify it
-            Then only the author of a DRAFT, or an admin in any status, is allowed
+            When a caller wants to edit it
+            Then only the author or an admin is allowed, in any status
             """)
-    void requireCanBeModifiedByAllowsAuthorOfDraftOrAnyAdmin(Long caller, boolean admin, QuestionStatus status, boolean allowed) {
+    void requireCanBeModifiedByAllowsAuthorOrAnyAdmin(Long caller, boolean admin, QuestionStatus status, boolean allowed) {
         // Given
         Question question = aQuestion().status(status).build();
 
@@ -144,6 +178,37 @@ class QuestionServiceTest {
         } else {
             assertThrows(QuestionModificationForbiddenException.class,
                     () -> questionService.requireCanBeModifiedBy(question, caller, admin));
+        }
+    }
+
+    @ParameterizedTest(name = "{0} (admin: {1}) on a {2} question -> allowed: {3}")
+    @CsvSource(textBlock = """
+            # caller,    admin, status,    allowed
+            1001,        false, DRAFT,     true
+            1001,        false, SUBMITTED, false
+            1001,        false, RETIRED,   false
+            1002,        false, DRAFT,     false
+            1002,        false, SUBMITTED, false
+            1002,        false, RETIRED,   false
+            1003,        true,  DRAFT,     true
+            1003,        true,  SUBMITTED, true
+            1003,        true,  RETIRED,   true
+            """)
+    @DisplayName("""
+            Given a question written by an author, in a given status
+            When a caller wants to delete it
+            Then only the author of a DRAFT, or an admin in any status, is allowed
+            """)
+    void requireCanBeDeletedByAllowsAuthorOfDraftOrAnyAdmin(Long caller, boolean admin, QuestionStatus status, boolean allowed) {
+        // Given
+        Question question = aQuestion().status(status).build();
+
+        // When / Then
+        if (allowed) {
+            assertDoesNotThrow(() -> questionService.requireCanBeDeletedBy(question, caller, admin));
+        } else {
+            assertThrows(ForbiddenException.class,
+                    () -> questionService.requireCanBeDeletedBy(question, caller, admin));
         }
     }
 
@@ -166,7 +231,7 @@ class QuestionServiceTest {
                 () -> questionService.requireNoDraftConcepts(concepts));
 
         // Then
-        assertEquals("A question can't be active while these concepts are drafts: java-records, java-modules",
+        assertEquals("A question can't be submitted while these concepts are drafts: java-records, java-modules",
                 exception.getMessage());
     }
 
@@ -184,6 +249,33 @@ class QuestionServiceTest {
 
         // When / Then
         assertDoesNotThrow(() -> questionService.requireNoDraftConcepts(concepts));
+    }
+
+    @ParameterizedTest(name = "{0} concept owned by 1001, question by {1} -> awaits approval: {2}")
+    @CsvSource(textBlock = """
+            # policy,        author, awaits
+            AUTO_ACCEPT,     1002,   false
+            AUTO_ACCEPT,     1001,   false
+            OWNER_APPROVAL,  1002,   true
+            OWNER_APPROVAL,  1001,   false
+            """)
+    @DisplayName("""
+            Given a concept with a contribution policy, and a question's author
+            When the question is linked to the concept
+            Then it waits for approval only if the owner approves contributions and didn't write it
+            """)
+    void tagsAwaitingApprovalFollowsPolicyAndOwnership(ContributionPolicy policy, Long author, boolean awaits) {
+        // Given
+        Concept concept = aConcept("java-core", ConceptStatus.ACTIVE).toBuilder()
+                .contributionPolicy(policy)
+                .createdBy(1001L)
+                .build();
+
+        // When
+        List<String> awaiting = questionService.tagsAwaitingApproval(List.of(concept), author);
+
+        // Then
+        assertEquals(awaits ? List.of("java-core") : List.of(), awaiting);
     }
 
     // ---------------------------------------------------------------------
@@ -210,6 +302,7 @@ class QuestionServiceTest {
         assertEquals(QuestionStatus.DRAFT, question.getStatus());
         assertEquals(AUTHOR, question.getCreatedBy());
         assertEquals(AUTHOR, question.getUpdatedBy());
+        assertEquals("Equality of objects", question.getTitle());
         assertEquals("Explain == vs equals", question.getRequirement());
     }
 
@@ -221,10 +314,10 @@ class QuestionServiceTest {
             """)
     void updatedQuestionKeepsIdentityStatusAndAuthor() {
         // Given
-        Question existing = aQuestion().status(QuestionStatus.ACTIVE).build();
+        Question existing = aQuestion().status(QuestionStatus.SUBMITTED).build();
         UpdateQuestionCommand command = anUpdateCommand()
+                .title("Updated title")
                 .requirement("Updated requirement")
-                .type(QuestionType.GOTCHA)
                 .conceptTags(List.of("java-core", "java-core"))
                 .build();
 
@@ -232,34 +325,32 @@ class QuestionServiceTest {
         Question question = questionService.updatedQuestion(existing, command, 1003L);
 
         // Then
+        assertEquals("Updated title", question.getTitle());
         assertEquals("Updated requirement", question.getRequirement());
-        assertEquals(QuestionType.GOTCHA, question.getType());
         assertEquals(List.of("java-core"), question.getConceptTags());
         assertEquals(1003L, question.getUpdatedBy());
         assertEquals(42L, question.getId());
-        assertEquals(QuestionStatus.ACTIVE, question.getStatus());
+        assertEquals(QuestionStatus.SUBMITTED, question.getStatus());
         assertEquals(AUTHOR, question.getCreatedBy());
         assertEquals(CREATED, question.getCreatedAt());
     }
 
     private static SubmitQuestionCommand.SubmitQuestionCommandBuilder aSubmitCommand() {
         return SubmitQuestionCommand.builder()
+                .title("Equality of objects")
                 .requirement("Explain == vs equals")
                 .sampleSolution("Reference vs logical equality")
-                .type(QuestionType.DEFINITION)
                 .difficultyScore(3)
-                .expectedDurationMinutes(5)
                 .source("manu")
                 .conceptTags(List.of("java-core"));
     }
 
     private static UpdateQuestionCommand.UpdateQuestionCommandBuilder anUpdateCommand() {
         return UpdateQuestionCommand.builder()
+                .title("Equality of objects")
                 .requirement("Explain == vs equals")
                 .sampleSolution("Reference vs logical equality")
-                .type(QuestionType.DEFINITION)
                 .difficultyScore(3)
-                .expectedDurationMinutes(5)
                 .source("manu")
                 .conceptTags(List.of("java-core"));
     }
@@ -267,11 +358,10 @@ class QuestionServiceTest {
     private static Question.QuestionBuilder aQuestion() {
         return Question.builder()
                 .id(42L)
+                .title("Original title")
                 .requirement("Original requirement")
                 .sampleSolution("Original solution")
-                .type(QuestionType.DEFINITION)
                 .difficultyScore(2)
-                .expectedDurationMinutes(5)
                 .status(QuestionStatus.DRAFT)
                 .conceptTags(List.of("java-core"))
                 .createdBy(AUTHOR)

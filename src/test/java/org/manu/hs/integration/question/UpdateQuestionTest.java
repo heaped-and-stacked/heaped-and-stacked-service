@@ -4,9 +4,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.manu.hs.api.content.dto.QuestionResponse;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.concept.ContributionPolicy;
+import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionStatus;
-import org.manu.hs.domain.question.QuestionType;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -37,11 +38,10 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
 
         String requestBody = """
                 {
+                    "title": "Updated title",
                     "requirement": "Updated requirement",
                     "sampleSolution": "Updated solution",
-                    "type": "GOTCHA",
                     "difficultyScore": 4,
-                    "expectedDurationMinutes": 8,
                     "source": "manu",
                     "conceptTags": ["java-generics"]
                 }
@@ -58,8 +58,8 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
                 .getResponseBody();
 
         assertNotNull(updatedQuestion);
+        assertEquals("Updated title", updatedQuestion.getTitle());
         assertEquals("Updated requirement", updatedQuestion.getRequirement());
-        assertEquals(QuestionType.GOTCHA, updatedQuestion.getType());
         assertEquals(4, updatedQuestion.getDifficultyScore());
         assertEquals(List.of("java-generics"), updatedQuestion.getConceptTags());
         assertEquals(QuestionStatus.DRAFT, updatedQuestion.getStatus());
@@ -73,13 +73,13 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
     @Test
     @DisplayName("""
             Given the caller is an admin
-            When a PUT request is sent to the questions endpoint for another author's ACTIVE question
+            When a PUT request is sent to the questions endpoint for another author's submitted question
             Then the question is updated, keeps its author and status, and records the admin as updater
             """)
     void updateQuestionReturnsOkWhenAdminEditsAnyQuestion() {
         // Given
         insertConcept("java-core");
-        Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
         actingAs(ADMIN);
 
         // When
@@ -93,8 +93,9 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
                 .getResponseBody();
 
         assertNotNull(updatedQuestion);
+        assertEquals("Updated title", updatedQuestion.getTitle());
         assertEquals("Updated requirement", updatedQuestion.getRequirement());
-        assertEquals(QuestionStatus.ACTIVE, updatedQuestion.getStatus());
+        assertEquals(QuestionStatus.SUBMITTED, updatedQuestion.getStatus());
         assertEquals(AUTHOR, updatedQuestion.getCreatedBy());
         assertEquals(ADMIN, updatedQuestion.getUpdatedBy());
     }
@@ -123,15 +124,63 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
-            Given an admin links an ACTIVE question to a concept that is still a draft
+            Given a submitted question still waiting for approval on one concept
+            When its author edits it and also links a new concept whose owner approves contributions
+            Then the existing link keeps its state and the new link waits for its owner's approval
+            """)
+    void updateQuestionKeepsExistingLinksAndEvaluatesNewOnes() {
+        // Given
+        insertConcept("java-core");
+        setContributionPolicy("java-core", ContributionPolicy.OWNER_APPROVAL);
+        insertConcept("java-generics");
+        setContributionPolicy("java-generics", ContributionPolicy.OWNER_APPROVAL);
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, OTHER_USER, "java-core");
+        setConceptLinkStatus(questionId, "java-core", ConceptLinkStatus.PENDING);
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core", "java-generics"));
+
+        // Then
+        response.expectStatus().isOk();
+
+        assertEquals(ConceptLinkStatus.PENDING, findConceptLinkStatus(questionId, "java-core"));
+        assertEquals(ConceptLinkStatus.PENDING, findConceptLinkStatus(questionId, "java-generics"));
+    }
+
+    @Test
+    @DisplayName("""
+            Given a question accepted for one concept
+            When its author edits it without changing its concepts
+            Then the concept keeps its accepted state, so edits never re-open a decision
+            """)
+    void updateQuestionKeepsAcceptedLinkWhenConceptsUnchanged() {
+        // Given
+        insertConcept("java-core");
+        setContributionPolicy("java-core", ContributionPolicy.OWNER_APPROVAL);
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, OTHER_USER, "java-core");
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core"));
+
+        // Then
+        response.expectStatus().isOk();
+
+        assertEquals(ConceptLinkStatus.ACCEPTED, findConceptLinkStatus(questionId, "java-core"));
+    }
+
+    @Test
+    @DisplayName("""
+            Given an admin links a submitted question to a concept that is still a draft
             When a PUT request is sent to the questions endpoint
             Then a conflict is returned and the question is unchanged
             """)
-    void updateQuestionReturnsConflictWhenActiveQuestionLinksDraftConcept() {
+    void updateQuestionReturnsConflictWhenSubmittedQuestionLinksDraftConcept() {
         // Given
         insertConcept("java-core");
         insertConcept("java-records", ConceptStatus.DRAFT);
-        Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
         actingAs(ADMIN);
 
         // When
@@ -142,7 +191,7 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
                 .expectStatus().isEqualTo(HttpStatus.CONFLICT)
                 .expectBody()
                 .jsonPath("$.message")
-                .isEqualTo("A question can't be active while these concepts are drafts: java-records");
+                .isEqualTo("A question can't be submitted while these concepts are drafts: java-records");
 
         assertEquals("Original requirement", findQuestionById(questionId).getRequirement());
         assertEquals(List.of("java-core"), findConceptTagsForQuestion(questionId));
@@ -178,23 +227,26 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
-            Given the caller is the author but the question is no longer in draft status
-            When a PUT request is sent to the questions endpoint
-            Then a forbidden response is returned and the question is unchanged
+            Given the caller is the author of a question that is already submitted
+            When a PUT request is sent to the questions endpoint with a valid payload
+            Then the question is updated with HTTP 200 and stays submitted, as authors may fix
+            typos and phrasing at any time
             """)
-    void updateQuestionReturnsForbiddenWhenAuthorEditsNonDraftQuestion() {
+    void updateQuestionReturnsOkWhenAuthorEditsOwnSubmittedQuestion() {
         // Given
         insertConcept("java-core");
-        Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
         actingAs(AUTHOR);
 
         // When
         RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core"));
 
         // Then
-        response.expectStatus().isForbidden();
+        response.expectStatus().isOk();
 
-        assertEquals("Original requirement", findQuestionById(questionId).getRequirement());
+        Question dbRecord = findQuestionById(questionId);
+        assertEquals("Updated requirement", dbRecord.getRequirement());
+        assertEquals(QuestionStatus.SUBMITTED, dbRecord.getStatus());
     }
 
     @Test

@@ -26,7 +26,7 @@ class ContributorJourneyTest extends AbstractIntegrationTest {
     @DisplayName("""
             Given a visitor with a GitHub account and an approved concept
             When they sign in for the first time, check their profile and submit a question
-            Then they are a new member, and the question is theirs and waits in the admin's review queue
+            Then they are a new member, and the question is submitted and listed as theirs
             """)
     void firstSignInThenContributeAQuestion() {
         // Given
@@ -52,9 +52,9 @@ class ContributorJourneyTest extends AbstractIntegrationTest {
                 .returnResult()
                 .getResponseBody();
 
-        // Then: it is a draft owned by them, listed under "my questions"
+        // Then: it is submitted, owned by them, and listed under "my questions"
         assertNotNull(submitted);
-        assertEquals("DRAFT", submitted.getStatus().name());
+        assertEquals("SUBMITTED", submitted.getStatus().name());
         assertEquals(findIdentity(AuthProvider.GITHUB, "5001").getUserId(), submitted.getCreatedBy());
 
         List<QuestionResponse> mine = browser.get().uri("/content/questions/mine").exchange()
@@ -65,12 +65,5 @@ class ContributorJourneyTest extends AbstractIntegrationTest {
                 .getResponseBody();
         assertNotNull(mine);
         assertEquals(List.of(submitted.getId()), mine.stream().map(QuestionResponse::getId).toList());
-
-        // And: it waits in the admin's review queue
-        actingAs(ADMIN);
-        restClient.get().uri("/content/questions/review").exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$[0].id").isEqualTo(submitted.getId().intValue());
     }
 }

@@ -7,9 +7,10 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.manu.hs.api.content.dto.QuestionResponse;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.concept.ContributionPolicy;
+import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionStatus;
-import org.manu.hs.domain.question.QuestionType;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -31,7 +32,7 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
     @DisplayName("""
             Given a member and a valid payload with at least one existing concept tag
             When a POST request is sent to the questions endpoint
-            Then the question is created in DRAFT status and returned with HTTP 201
+            Then the question is created as SUBMITTED and returned with HTTP 201
             """)
     void submitQuestionReturnsCreatedWhenPayloadIsValid() {
         // Given
@@ -40,11 +41,10 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
 
         String requestBody = """
                 {
+                    "title": "Equality of objects",
                     "requirement": "Explain the difference between == and .equals() for objects",
                     "sampleSolution": "== compares references, .equals() compares logical equality",
-                    "type": "DEFINITION",
                     "difficultyScore": 2,
-                    "expectedDurationMinutes": 1,
                     "source": "manu",
                     "conceptTags": ["java-core"]
                 }
@@ -65,8 +65,8 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
         assertEquals(
                 "Explain the difference between == and .equals() for objects",
                 createdQuestion.getRequirement());
-        assertEquals(QuestionType.DEFINITION, createdQuestion.getType());
-        assertEquals(QuestionStatus.DRAFT, createdQuestion.getStatus());
+        assertEquals("Equality of objects", createdQuestion.getTitle());
+        assertEquals(QuestionStatus.SUBMITTED, createdQuestion.getStatus());
         assertEquals(List.of("java-core"), createdQuestion.getConceptTags());
         assertEquals(AUTHOR, createdQuestion.getCreatedBy());
         assertEquals(AUTHOR, createdQuestion.getUpdatedBy());
@@ -75,69 +75,24 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
 
         // Verify database entry
         Question dbRecord = findQuestionById(createdQuestion.getId());
-        assertEquals(QuestionStatus.DRAFT, dbRecord.getStatus());
+        assertEquals("Equality of objects", dbRecord.getTitle());
+        assertEquals(QuestionStatus.SUBMITTED, dbRecord.getStatus());
         assertEquals(AUTHOR, dbRecord.getCreatedBy());
         assertEquals(List.of("java-core"), findConceptTagsForQuestion(createdQuestion.getId()));
     }
 
     @Test
     @DisplayName("""
-            Given an admin and a valid payload
+            Given a member submitting a question linked to a concept that is still a draft
             When a POST request is sent to the questions endpoint
-            Then the question is created directly as ACTIVE
+            Then a conflict is returned, since submitted questions only link published concepts,
+            and nothing is persisted
             """)
-    void submitQuestionReturnsActiveQuestionWhenCallerIsAdmin() {
+    void submitQuestionReturnsConflictWhenLinkingDraftConcept() {
         // Given
         insertConcept("java-core");
-        actingAs(ADMIN);
-
-        // When
-        RestTestClient.ResponseSpec response = submit(validQuestionJson("java-core"));
-
-        // Then
-        QuestionResponse createdQuestion = response
-                .expectStatus().isCreated()
-                .expectBody(QuestionResponse.class)
-                .returnResult()
-                .getResponseBody();
-
-        assertNotNull(createdQuestion);
-        assertEquals(QuestionStatus.ACTIVE, createdQuestion.getStatus());
-        assertEquals(QuestionStatus.ACTIVE, findQuestionById(createdQuestion.getId()).getStatus());
-    }
-
-    @Test
-    @DisplayName("""
-            Given a member proposing a question for a concept that is still a draft
-            When a POST request is sent to the questions endpoint
-            Then the question is created as a DRAFT, waiting for review together with the concept
-            """)
-    void submitQuestionReturnsCreatedWhenMemberLinksDraftConcept() {
-        // Given
         insertConcept("java-records", ConceptStatus.DRAFT);
         actingAs(AUTHOR);
-
-        // When
-        RestTestClient.ResponseSpec response = submit(validQuestionJson("java-records"));
-
-        // Then
-        response
-                .expectStatus().isCreated()
-                .expectBody()
-                .jsonPath("$.status").isEqualTo("DRAFT");
-    }
-
-    @Test
-    @DisplayName("""
-            Given an admin submitting a question linked to a concept that is still a draft
-            When a POST request is sent to the questions endpoint
-            Then a conflict is returned, since the question would be active, and nothing is persisted
-            """)
-    void submitQuestionReturnsConflictWhenAdminLinksDraftConcept() {
-        // Given
-        insertConcept("java-core");
-        insertConcept("java-records", ConceptStatus.DRAFT);
-        actingAs(ADMIN);
 
         // When
         RestTestClient.ResponseSpec response = submit(validQuestionJson("java-core", "java-records"));
@@ -147,9 +102,82 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
                 .expectStatus().isEqualTo(HttpStatus.CONFLICT)
                 .expectBody()
                 .jsonPath("$.message")
-                .isEqualTo("A question can't be active while these concepts are drafts: java-records");
+                .isEqualTo("A question can't be submitted while these concepts are drafts: java-records");
 
         assertEquals(0, countQuestions());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a concept that accepts contributed questions automatically
+            When another member submits a question for it
+            Then the question is accepted for that concept straight away
+            """)
+    void submitQuestionAcceptsLinkWhenConceptAcceptsAutomatically() {
+        // Given
+        insertConcept("java-core");
+        actingAs(OTHER_USER);
+
+        // When
+        QuestionResponse createdQuestion = submit(validQuestionJson("java-core"))
+                .expectStatus().isCreated()
+                .expectBody(QuestionResponse.class)
+                .returnResult()
+                .getResponseBody();
+
+        // Then
+        assertNotNull(createdQuestion);
+        assertEquals(ConceptLinkStatus.ACCEPTED, findConceptLinkStatus(createdQuestion.getId(), "java-core"));
+    }
+
+    @Test
+    @DisplayName("""
+            Given one concept whose owner approves contributed questions and one that accepts them
+            When another member submits a question linked to both
+            Then the question waits for approval on the first concept only, and is accepted on the second
+            """)
+    void submitQuestionLeavesLinkPendingOnlyWhereOwnerApproves() {
+        // Given
+        insertConcept("java-core");
+        setContributionPolicy("java-core", ContributionPolicy.OWNER_APPROVAL);
+        insertConcept("java-generics");
+        actingAs(OTHER_USER);
+
+        // When
+        QuestionResponse createdQuestion = submit(validQuestionJson("java-core", "java-generics"))
+                .expectStatus().isCreated()
+                .expectBody(QuestionResponse.class)
+                .returnResult()
+                .getResponseBody();
+
+        // Then
+        assertNotNull(createdQuestion);
+        assertEquals(ConceptLinkStatus.PENDING, findConceptLinkStatus(createdQuestion.getId(), "java-core"));
+        assertEquals(ConceptLinkStatus.ACCEPTED, findConceptLinkStatus(createdQuestion.getId(), "java-generics"));
+    }
+
+    @Test
+    @DisplayName("""
+            Given a concept whose owner approves contributed questions
+            When the owner submits a question for it
+            Then the question is accepted straight away, as owners don't approve their own questions
+            """)
+    void submitQuestionAcceptsLinkWhenAuthorOwnsConcept() {
+        // Given
+        insertConcept("java-core");
+        setContributionPolicy("java-core", ContributionPolicy.OWNER_APPROVAL);
+        actingAs(AUTHOR);
+
+        // When
+        QuestionResponse createdQuestion = submit(validQuestionJson("java-core"))
+                .expectStatus().isCreated()
+                .expectBody(QuestionResponse.class)
+                .returnResult()
+                .getResponseBody();
+
+        // Then
+        assertNotNull(createdQuestion);
+        assertEquals(ConceptLinkStatus.ACCEPTED, findConceptLinkStatus(createdQuestion.getId(), "java-core"));
     }
 
     @Test
@@ -183,7 +211,7 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
     @DisplayName("""
             Given a payload that also sets fields owned by the server (status, createdBy)
             When a POST request is sent to the questions endpoint
-            Then those fields are ignored: the question is a DRAFT owned by the caller
+            Then those fields are ignored: the question is SUBMITTED and owned by the caller
             """)
     void submitQuestionIgnoresServerOwnedFields() {
         // Given
@@ -192,13 +220,12 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
 
         String requestBody = """
                 {
+                    "title": "Equality of objects",
                     "requirement": "Explain the difference between == and .equals() for objects",
                     "sampleSolution": "== compares references, .equals() compares logical equality",
-                    "type": "DEFINITION",
                     "difficultyScore": 2,
-                    "expectedDurationMinutes": 1,
                     "conceptTags": ["java-core"],
-                    "status": "ACTIVE",
+                    "status": "RETIRED",
                     "createdBy": "someone-else"
                 }
                 """;
@@ -210,7 +237,7 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
         response
                 .expectStatus().isCreated()
                 .expectBody()
-                .jsonPath("$.status").isEqualTo("DRAFT")
+                .jsonPath("$.status").isEqualTo("SUBMITTED")
                 .jsonPath("$.createdBy").isEqualTo(AUTHOR);
     }
 
@@ -221,6 +248,9 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
     static Stream<Arguments> invalidPayloads() {
         String valid = validQuestionJson("java-core");
         return Stream.of(
+                arguments("title is missing",
+                        valid.replace("\"title\": \"Updated title\",", ""),
+                        "title is required"),
                 arguments("requirement is missing",
                         valid.replace("\"requirement\": \"Updated requirement\",", ""),
                         "requirement is required"),
@@ -275,28 +305,6 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
                 .isEqualTo("Concept tag 'does-not-exist' does not exist");
 
         assertEquals(0, countQuestions());
-    }
-
-    @Test
-    @DisplayName("""
-            Given a payload with an unknown question type
-            When a POST request is sent to the questions endpoint
-            Then a bad request is returned with a message
-            """)
-    void submitQuestionReturnsBadRequestWhenTypeIsUnknown() {
-        // Given
-        insertConcept("java-core");
-
-        String requestBody = validQuestionJson("java-core").replace("\"GOTCHA\"", "\"RIDDLE\"");
-
-        // When
-        RestTestClient.ResponseSpec response = submit(requestBody);
-
-        // Then
-        response
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.message").isNotEmpty();
     }
 
     private RestTestClient.ResponseSpec submit(String requestBody) {

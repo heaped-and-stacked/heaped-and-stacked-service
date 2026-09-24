@@ -3,7 +3,6 @@ package org.manu.hs.application.content.command;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
-import org.manu.hs.domain.question.QuestionType;
 
 import java.util.List;
 
@@ -16,11 +15,10 @@ import java.util.List;
 @Getter
 public class SubmitQuestionCommand {
 
+    private String title;
     private String requirement;
     private String sampleSolution;
-    private QuestionType type;
     private Integer difficultyScore;
-    private Integer expectedDurationMinutes;
     private String source;
     private List<String> conceptTags;
 }

@@ -106,7 +106,7 @@ class DeleteConceptTest extends AbstractIntegrationTest {
     void deleteConceptReturnsConflictWhenAQuestionUsesIt() {
         // Given
         insertConcept("java-core");
-        Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
         actingAs(ADMIN);
 
         // When

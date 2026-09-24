@@ -6,6 +6,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.manu.hs.domain.question.QuestionStatus;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import java.util.List;
@@ -71,7 +72,7 @@ class DeleteQuestionTest extends AbstractIntegrationTest {
     void deleteQuestionReturnsForbiddenWhenAuthorDeletesNonDraftQuestion() {
         // Given
         insertConcept("java-core");
-        Long questionId = insertQuestion(QuestionStatus.ACTIVE, AUTHOR, "java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
         actingAs(AUTHOR);
 
         // When
@@ -80,7 +81,36 @@ class DeleteQuestionTest extends AbstractIntegrationTest {
         // Then
         response.expectStatus().isForbidden();
 
-        assertEquals(QuestionStatus.ACTIVE, findQuestionById(questionId).getStatus());
+        assertEquals(QuestionStatus.SUBMITTED, findQuestionById(questionId).getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a question a learner has already answered
+            When an admin sends a DELETE request for it
+            Then a conflict is returned, since deleting it would erase the learner's history,
+            and the question and the answer are kept
+            """)
+    void deleteQuestionReturnsConflictWhenQuestionHasAnswers() {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        actingAs(OTHER_USER);
+        submitAnswer(questionId, "My answer");
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = delete(questionId);
+
+        // Then
+        response
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody()
+                .jsonPath("$.message")
+                .isEqualTo("Question with id '%d' has answers: retire it instead".formatted(questionId));
+
+        assertEquals(QuestionStatus.SUBMITTED, findQuestionById(questionId).getStatus());
+        assertEquals(1, countAnswers());
     }
 
     @Test

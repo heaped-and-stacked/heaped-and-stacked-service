@@ -40,8 +40,10 @@ public class SecurityConfig {
                 .cors(Customizer.withDefaults())
                 .authorizeHttpRequests(requests -> requests
                         .requestMatchers("/csrf", "/error").permitAll()
+                        // API docs; only served where springdoc is switched on (application.properties).
+                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/admin/**").hasRole("ADMIN")
-                        .requestMatchers("/content/**", "/users/**").authenticated()
+                        .requestMatchers("/content/**", "/learning/**", "/users/**").authenticated()
                         .anyRequest().denyAll())
                 .oauth2Login(login -> login
                         .userInfoEndpoint(userInfo -> userInfo.userService(signInService))

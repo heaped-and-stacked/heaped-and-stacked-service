@@ -4,6 +4,6 @@ import org.manu.hs.application.common.exception.base.ForbiddenException;
 
 public class QuestionModificationForbiddenException extends ForbiddenException {
     public QuestionModificationForbiddenException(Long id) {
-        super("Only the author may modify question '%d', and only while it is a draft".formatted(id));
+        super("Only the author of question '%d' may change it".formatted(id));
     }
 }

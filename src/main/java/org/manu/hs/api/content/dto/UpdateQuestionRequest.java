@@ -5,7 +5,6 @@ import com.fasterxml.jackson.annotation.Nulls;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.manu.hs.domain.question.QuestionType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,11 +13,10 @@ import java.util.List;
 @Setter
 @NoArgsConstructor
 public class UpdateQuestionRequest {
+    private String title;
     private String requirement;
     private String sampleSolution;
-    private QuestionType type;
     private Integer difficultyScore;
-    private Integer expectedDurationMinutes;
     private String source;
 
     @JsonSetter(nulls = Nulls.AS_EMPTY)

@@ -1,10 +1,11 @@
 package org.manu.hs.application.content;
 
 import lombok.RequiredArgsConstructor;
+import org.manu.hs.application.common.exception.AdminRequiredException;
 import org.manu.hs.application.content.command.CreateConceptCommand;
 import org.manu.hs.application.content.command.UpdateConceptCommand;
 import org.manu.hs.application.content.exception.ConceptAlreadyExistsException;
-import org.manu.hs.application.content.exception.ConceptHasActiveQuestionsException;
+import org.manu.hs.application.content.exception.ConceptHasSubmittedQuestionsException;
 import org.manu.hs.application.content.exception.ConceptInUseException;
 import org.manu.hs.application.content.exception.ConceptModificationForbiddenException;
 import org.manu.hs.application.content.exception.ConceptNotFoundException;
@@ -13,6 +14,7 @@ import org.manu.hs.application.content.exception.UnknownConceptTagException;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptRepository;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.concept.ContributionPolicy;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -69,10 +71,6 @@ class ConceptService {
         return conceptRepository.findAll();
     }
 
-    List<Concept> findByStatus(ConceptStatus status) {
-        return conceptRepository.findByStatus(status);
-    }
-
     /** The concepts for the given tags, as stored; tags without a concept are left out. */
     List<Concept> findByTags(List<String> tags) {
         return conceptRepository.findByTags(tags);
@@ -99,15 +97,37 @@ class ConceptService {
     }
 
     /**
-     * Admins may modify any concept in any status; authors only their own DRAFT concepts.
+     * A concept belongs to its author: the owner may change it in any status, as may any admin.
      */
     void requireCanBeModifiedBy(Concept concept, Long userId, boolean admin) {
-        final boolean authorOfDraft = concept.getCreatedBy().equals(userId)
-                && concept.getStatus() == ConceptStatus.DRAFT;
-
-        if (!admin && !authorOfDraft) {
+        if (!admin && !isOwner(concept, userId)) {
             throw new ConceptModificationForbiddenException(concept.getTag());
         }
+    }
+
+    /**
+     * Owners may delete their concept only while it is a DRAFT; once published, only admins may.
+     */
+    void requireCanBeDeletedBy(Concept concept, Long userId, boolean admin) {
+        requireCanBeModifiedBy(concept, userId, admin);
+
+        if (!admin && concept.getStatus() != ConceptStatus.DRAFT) {
+            throw new AdminRequiredException("delete a published concept");
+        }
+    }
+
+    /**
+     * Owners may publish their concept (ACTIVE); unpublishing and retiring are for admins.
+     * Whether the caller is the owner is checked separately, by requireCanBeModifiedBy.
+     */
+    void requireCanChangeStatusTo(ConceptStatus status, boolean admin) {
+        if (!admin && status != ConceptStatus.ACTIVE) {
+            throw new AdminRequiredException("unpublish or retire a concept");
+        }
+    }
+
+    private static boolean isOwner(Concept concept, Long userId) {
+        return concept.getCreatedBy().equals(userId);
     }
 
     void requireTagAvailable(String tag) {
@@ -123,11 +143,11 @@ class ConceptService {
     }
 
     /**
-     * A concept used by an ACTIVE question may not go back to DRAFT; retiring it is allowed.
+     * A concept used by a SUBMITTED question may not go back to DRAFT; retiring it is allowed.
      */
     void requireCanMoveTo(String tag, ConceptStatus status) {
-        if (status == ConceptStatus.DRAFT && conceptRepository.isReferencedByActiveQuestion(tag)) {
-            throw new ConceptHasActiveQuestionsException(tag);
+        if (status == ConceptStatus.DRAFT && conceptRepository.isReferencedBySubmittedQuestion(tag)) {
+            throw new ConceptHasSubmittedQuestionsException(tag);
         }
     }
 
@@ -139,8 +159,8 @@ class ConceptService {
         return conceptRepository.save(newConcept(command, status), userId);
     }
 
-    Concept update(String tag, UpdateConceptCommand command, Long userId) {
-        return conceptRepository.update(updatedConcept(tag, command), userId);
+    Concept update(Concept existing, UpdateConceptCommand command, Long userId) {
+        return conceptRepository.update(updatedConcept(existing, command), userId);
     }
 
     Concept updateStatus(String tag, ConceptStatus status, Long updatedBy) {
@@ -159,16 +179,24 @@ class ConceptService {
                 .description(command.getDescription())
                 .externalReferences(List.copyOf(command.getExternalReferences()))
                 .status(status)
+                .contributionPolicy(command.getContributionPolicy() != null
+                        ? command.getContributionPolicy()
+                        : ContributionPolicy.AUTO_ACCEPT)
                 .build();
     }
 
-    /** Builds the edited concept from the command. Pure: no repository access. */
-    Concept updatedConcept(String tag, UpdateConceptCommand command) {
-        return Concept.builder()
-                .tag(tag)
+    /**
+     * Builds the edited concept: content comes from the command; tag, status, owner and, unless
+     * the command sets one, the contribution policy are kept. Pure: no repository access.
+     */
+    Concept updatedConcept(Concept existing, UpdateConceptCommand command) {
+        return existing.toBuilder()
                 .name(command.getName())
                 .description(command.getDescription())
                 .externalReferences(List.copyOf(command.getExternalReferences()))
+                .contributionPolicy(command.getContributionPolicy() != null
+                        ? command.getContributionPolicy()
+                        : existing.getContributionPolicy())
                 .build();
     }
 }

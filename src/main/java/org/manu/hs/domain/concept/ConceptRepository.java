@@ -12,10 +12,8 @@ public interface ConceptRepository {
     Optional<Concept> findByTag(String tag);
     void deleteByTag(String tag);
     List<Concept> findAll();
-    /** The concepts in the given status, oldest first. */
-    List<Concept> findByStatus(ConceptStatus status);
     boolean isReferencedByAnyQuestion(String tag);
-    boolean isReferencedByActiveQuestion(String tag);
+    boolean isReferencedBySubmittedQuestion(String tag);
     /** The concepts among the given tags that exist; unknown tags are simply absent. */
     List<Concept> findByTags(Collection<String> tags);
 }

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.manu.hs.api.content.dto.ConceptResponse;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.concept.ContributionPolicy;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -24,7 +25,7 @@ class CreateConceptTest extends AbstractIntegrationTest {
     @DisplayName("""
             Given a member and a valid payload for a concept with a tag that does not exist
             When a POST request is sent to the concepts endpoint
-            Then the concept is created as a DRAFT owned by the member and returned with HTTP 201
+            Then the concept is created published (ACTIVE), owned by the member, and returned with HTTP 201
             """)
     void createConceptReturnsCreatedWhenPayloadIsMinimal() {
         // Given
@@ -51,7 +52,8 @@ class CreateConceptTest extends AbstractIntegrationTest {
         assertEquals("java-core", createdConcept.getTag());
         assertEquals("Java Core", createdConcept.getName());
         assertEquals("Fundamentals of Java programming language", createdConcept.getDescription());
-        assertEquals(ConceptStatus.DRAFT, createdConcept.getStatus());
+        assertEquals(ConceptStatus.ACTIVE, createdConcept.getStatus());
+        assertEquals(ContributionPolicy.AUTO_ACCEPT, createdConcept.getContributionPolicy());
         assertEquals(AUTHOR, createdConcept.getCreatedBy());
         assertEquals(AUTHOR, createdConcept.getUpdatedBy());
         assertNotNull(createdConcept.getCreatedAt());
@@ -60,47 +62,16 @@ class CreateConceptTest extends AbstractIntegrationTest {
         // Verify database entry
         Concept dbRecord = findConceptByTag("java-core");
         assertEquals("Java Core", dbRecord.getName());
-        assertEquals(ConceptStatus.DRAFT, dbRecord.getStatus());
+        assertEquals(ConceptStatus.ACTIVE, dbRecord.getStatus());
+        assertEquals(ContributionPolicy.AUTO_ACCEPT, dbRecord.getContributionPolicy());
         assertEquals(AUTHOR, dbRecord.getCreatedBy());
     }
 
     @Test
     @DisplayName("""
-            Given an admin and a valid payload for a new concept
+            Given a valid payload for a new concept with external references and a contribution policy
             When a POST request is sent to the concepts endpoint
-            Then the concept is created directly as ACTIVE
-            """)
-    void createConceptReturnsActiveConceptWhenCallerIsAdmin() {
-        // Given
-        actingAs(ADMIN);
-        String requestBody = """
-                {
-                    "tag": "java-core",
-                    "name": "Java Core",
-                    "description": "Fundamentals of Java programming language"
-                }
-                """;
-
-        // When
-        RestTestClient.ResponseSpec response = create(requestBody);
-
-        // Then
-        ConceptResponse createdConcept = response
-                .expectStatus().isCreated()
-                .expectBody(ConceptResponse.class)
-                .returnResult()
-                .getResponseBody();
-
-        assertNotNull(createdConcept);
-        assertEquals(ConceptStatus.ACTIVE, createdConcept.getStatus());
-        assertEquals(ConceptStatus.ACTIVE, findConceptByTag("java-core").getStatus());
-    }
-
-    @Test
-    @DisplayName("""
-            Given a valid payload for a concept with a tag that does not exist and external references
-            When a POST request is sent to the concepts endpoint
-            Then the concept is created with its references and returned with HTTP 201
+            Then the concept is created with its references and policy, and returned with HTTP 201
             """)
     void createConceptReturnsCreatedWhenPayloadIsFull() {
         // Given
@@ -112,7 +83,8 @@ class CreateConceptTest extends AbstractIntegrationTest {
                     "externalReferences": [
                         "Effective Java — Joshua Bloch, 3rd Edition https://books.google.ro/books?id=ka2VUBqHiWkC&printsec=copyright&redir_esc=y#v=onepage&q&f=false",
                         "Java Brains — Java Essentials https://www.javabrains.io/courses/java-essentials"
-                    ]
+                    ],
+                    "contributionPolicy": "OWNER_APPROVAL"
                 }
                 """;
 
@@ -132,9 +104,12 @@ class CreateConceptTest extends AbstractIntegrationTest {
 
         assertNotNull(createdConcept);
         assertEquals(expectedReferences, createdConcept.getExternalReferences());
+        assertEquals(ContributionPolicy.OWNER_APPROVAL, createdConcept.getContributionPolicy());
 
         // Verify database entry
-        assertEquals(expectedReferences, findConceptByTag("java-core").getExternalReferences());
+        Concept dbRecord = findConceptByTag("java-core");
+        assertEquals(expectedReferences, dbRecord.getExternalReferences());
+        assertEquals(ContributionPolicy.OWNER_APPROVAL, dbRecord.getContributionPolicy());
     }
 
     @Test

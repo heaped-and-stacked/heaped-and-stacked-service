@@ -1,19 +1,24 @@
 package org.manu.hs.application.content;
 
 import lombok.RequiredArgsConstructor;
+import org.manu.hs.application.common.exception.AdminRequiredException;
 import org.manu.hs.application.common.exception.InvalidFieldValueException;
 import org.manu.hs.application.common.exception.RequiredFieldMissingException;
 import org.manu.hs.application.content.command.SubmitQuestionCommand;
 import org.manu.hs.application.content.command.UpdateQuestionCommand;
+import org.manu.hs.application.content.exception.ConceptLinkNotFoundException;
+import org.manu.hs.application.content.exception.QuestionAnsweredException;
 import org.manu.hs.application.content.exception.QuestionHasDraftConceptsException;
 import org.manu.hs.application.content.exception.QuestionModificationForbiddenException;
 import org.manu.hs.application.content.exception.QuestionNotFoundException;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.concept.ContributionPolicy;
+import org.manu.hs.domain.question.ConceptLink;
+import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionRepository;
 import org.manu.hs.domain.question.QuestionStatus;
-import org.manu.hs.domain.question.QuestionType;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -34,6 +39,7 @@ class QuestionService {
 
     private static final int MIN_DIFFICULTY_SCORE = 1;
     private static final int MAX_DIFFICULTY_SCORE = 10;
+    private static final int MAX_TITLE_LENGTH = 120;
 
     private final QuestionRepository questionRepository;
 
@@ -43,46 +49,52 @@ class QuestionService {
 
     void validate(SubmitQuestionCommand command) {
         validateFields(
+                command.getTitle(),
                 command.getRequirement(),
                 command.getSampleSolution(),
-                command.getType(),
                 command.getDifficultyScore(),
-                command.getExpectedDurationMinutes(),
                 command.getConceptTags());
     }
 
     void validate(UpdateQuestionCommand command) {
         validateFields(
+                command.getTitle(),
                 command.getRequirement(),
                 command.getSampleSolution(),
-                command.getType(),
                 command.getDifficultyScore(),
-                command.getExpectedDurationMinutes(),
                 command.getConceptTags());
     }
 
     private void validateFields(
+            String title,
             String requirement,
             String sampleSolution,
-            QuestionType type,
             Integer difficultyScore,
-            Integer expectedDurationMinutes,
             List<String> conceptTags) {
+        requireNonBlank(title, "title");
+        if (title.length() > MAX_TITLE_LENGTH) {
+            throw new InvalidFieldValueException(
+                    "title",
+                    "must be at most %d characters".formatted(MAX_TITLE_LENGTH));
+        }
         requireNonBlank(requirement, "requirement");
         requireNonBlank(sampleSolution, "sampleSolution");
-        requireNonNull(type, "type");
         requireNonNull(difficultyScore, "difficultyScore");
         if (difficultyScore < MIN_DIFFICULTY_SCORE || difficultyScore > MAX_DIFFICULTY_SCORE) {
             throw new InvalidFieldValueException(
                     "difficultyScore",
                     "must be between %d and %d".formatted(MIN_DIFFICULTY_SCORE, MAX_DIFFICULTY_SCORE));
         }
-        requireNonNull(expectedDurationMinutes, "expectedDurationMinutes");
-        if (expectedDurationMinutes <= 0) {
-            throw new InvalidFieldValueException("expectedDurationMinutes", "must be greater than 0");
-        }
         if (conceptTags == null || conceptTags.isEmpty()) {
             throw new RequiredFieldMissingException("conceptTags");
+        }
+    }
+
+    /** A review either accepts or declines a question for a concept. */
+    void validateReviewDecision(ConceptLinkStatus decision) {
+        requireNonNull(decision, "status");
+        if (decision == ConceptLinkStatus.PENDING) {
+            throw new InvalidFieldValueException("status", "must be ACCEPTED or DECLINED");
         }
     }
 
@@ -99,24 +111,48 @@ class QuestionService {
         return questionRepository.findBySubmittedBy(userId);
     }
 
-    List<Question> findByStatus(QuestionStatus status) {
-        return questionRepository.findByStatus(status);
+    /** What waits for a decision: on the caller's own concepts, or on every concept for admins. */
+    List<ConceptLink> findLinksAwaitingReview(Long userId, boolean admin) {
+        return admin
+                ? questionRepository.findLinksAwaitingReview()
+                : questionRepository.findLinksAwaitingReviewByConceptOwner(userId);
+    }
+
+    void requireLinkedTo(Question question, String conceptTag) {
+        if (!question.getConceptTags().contains(conceptTag)) {
+            throw new ConceptLinkNotFoundException(question.getId(), conceptTag);
+        }
     }
 
     /**
-     * Admins may modify any question in any status; authors only their own DRAFT questions.
+     * The author may edit their question in any status (typos, better phrasing), as may any admin.
      */
     void requireCanBeModifiedBy(Question question, Long userId, boolean admin) {
-        final boolean authorOfDraft = question.getCreatedBy().equals(userId)
-                && question.getStatus() == QuestionStatus.DRAFT;
-
-        if (!admin && !authorOfDraft) {
+        if (!admin && !question.getCreatedBy().equals(userId)) {
             throw new QuestionModificationForbiddenException(question.getId());
         }
     }
 
     /**
-     * An ACTIVE question may not link a concept that is still a DRAFT.
+     * Authors may delete their question only while it is a DRAFT; once submitted, only admins may.
+     */
+    void requireCanBeDeletedBy(Question question, Long userId, boolean admin) {
+        requireCanBeModifiedBy(question, userId, admin);
+
+        if (!admin && question.getStatus() != QuestionStatus.DRAFT) {
+            throw new AdminRequiredException("delete a submitted question");
+        }
+    }
+
+    /** Answered questions are retired, not deleted, so learners keep their history. */
+    void requireNotAnswered(Long id) {
+        if (questionRepository.isReferencedByAnyAnswer(id)) {
+            throw new QuestionAnsweredException(id);
+        }
+    }
+
+    /**
+     * A SUBMITTED question may not link a concept that is still a DRAFT.
      */
     void requireNoDraftConcepts(List<Concept> concepts) {
         final List<String> draftTags = concepts.stream()
@@ -129,20 +165,40 @@ class QuestionService {
         }
     }
 
+    /**
+     * The concepts a question by this author has to wait on: those whose owner approves
+     * contributions, unless the author is that owner. Pure: no repository access.
+     */
+    List<String> tagsAwaitingApproval(List<Concept> concepts, Long authorId) {
+        return concepts.stream()
+                .filter(concept -> concept.getContributionPolicy() == ContributionPolicy.OWNER_APPROVAL)
+                .filter(concept -> !concept.getCreatedBy().equals(authorId))
+                .map(Concept::getTag)
+                .toList();
+    }
+
     // ---------------------------------------------------------------------
     // Building and persistence
     // ---------------------------------------------------------------------
 
-    Question create(SubmitQuestionCommand command, QuestionStatus status, Long userId) {
-        return questionRepository.insert(newQuestion(command, status, userId));
+    Question create(SubmitQuestionCommand command, QuestionStatus status, Long userId, List<String> tagsAwaitingApproval) {
+        return questionRepository.insert(newQuestion(command, status, userId), tagsAwaitingApproval);
     }
 
-    Question update(Question existing, UpdateQuestionCommand command, Long userId) {
-        return questionRepository.update(existing.getId(), updatedQuestion(existing, command, userId));
+    Question update(Question existing, UpdateQuestionCommand command, Long userId, List<String> tagsAwaitingApproval) {
+        return questionRepository.update(
+                existing.getId(),
+                updatedQuestion(existing, command, userId),
+                tagsAwaitingApproval);
     }
 
     Question updateStatus(Long id, QuestionStatus status, Long updatedBy) {
         return questionRepository.updateStatus(id, status, updatedBy);
+    }
+
+    /** Records the concept owner's (or an admin's) decision on a question for that concept. */
+    void decide(Long questionId, String conceptTag, ConceptLinkStatus decision, Long decidedBy) {
+        questionRepository.updateLinkStatus(questionId, conceptTag, decision, decidedBy);
     }
 
     void delete(Long id) {
@@ -153,11 +209,10 @@ class QuestionService {
     Question newQuestion(SubmitQuestionCommand command, QuestionStatus status, Long userId) {
         return Question.builder()
                 .conceptTags(withoutDuplicates(command.getConceptTags()))
+                .title(command.getTitle())
                 .requirement(command.getRequirement())
                 .sampleSolution(command.getSampleSolution())
-                .type(command.getType())
                 .difficultyScore(command.getDifficultyScore())
-                .expectedDurationMinutes(command.getExpectedDurationMinutes())
                 .status(status)
                 .source(command.getSource())
                 .createdBy(userId)
@@ -172,11 +227,10 @@ class QuestionService {
     Question updatedQuestion(Question existing, UpdateQuestionCommand command, Long userId) {
         return existing.toBuilder()
                 .conceptTags(withoutDuplicates(command.getConceptTags()))
+                .title(command.getTitle())
                 .requirement(command.getRequirement())
                 .sampleSolution(command.getSampleSolution())
-                .type(command.getType())
                 .difficultyScore(command.getDifficultyScore())
-                .expectedDurationMinutes(command.getExpectedDurationMinutes())
                 .source(command.getSource())
                 .updatedBy(userId)
                 .build();

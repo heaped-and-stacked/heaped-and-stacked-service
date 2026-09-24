@@ -2,13 +2,15 @@ package org.manu.hs.integration;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.manu.hs.api.learning.dto.AnswerResponse;
 import org.manu.hs.application.user.UserApplication;
 import org.manu.hs.application.user.command.SignInCommand;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.concept.ContributionPolicy;
+import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionStatus;
-import org.manu.hs.domain.question.QuestionType;
 import org.manu.hs.domain.user.AuthProvider;
 import org.manu.hs.domain.user.User;
 import org.manu.hs.domain.user.UserIdentity;
@@ -20,6 +22,7 @@ import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTe
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextImpl;
@@ -352,11 +355,15 @@ public abstract class AbstractIntegrationTest {
                 createdBy);
     }
 
+    protected void setContributionPolicy(String tag, ContributionPolicy policy) {
+        jdbcTemplate.update("UPDATE concept SET contribution_policy = ? WHERE tag = ?", policy.name(), tag);
+    }
+
     protected Concept findConceptByTag(String tag) {
         return jdbcTemplate.queryForObject(
                 """
                         SELECT tag, name, description, external_references, concept_status,
-                               created_by, updated_by
+                               contribution_policy, created_by, updated_by
                         FROM concept
                         WHERE tag = ?
                         """,
@@ -370,6 +377,7 @@ public abstract class AbstractIntegrationTest {
                                         new TypeReference<>() {
                                         }))
                         .status(ConceptStatus.valueOf(resultSet.getString("concept_status")))
+                        .contributionPolicy(ContributionPolicy.valueOf(resultSet.getString("contribution_policy")))
                         .createdBy(resultSet.getLong("created_by"))
                         .updatedBy(resultSet.getLong("updated_by"))
                         .build(),
@@ -393,32 +401,30 @@ public abstract class AbstractIntegrationTest {
      * Inserts a question with its concept links and returns the generated id.
      * The concepts must exist first ({@link #insertConcept}).
      * <p>
-     * Other fields get fixed values: requirement "Original requirement", sample solution
-     * "Original solution", type DEFINITION, difficulty 2, duration 5, source "manu".
+     * Other fields get fixed values: title "Original title", requirement "Original requirement",
+     * sample solution "Original solution", difficulty 2, source "manu".
      */
     protected Long insertQuestion(QuestionStatus status, Long createdBy, String... conceptTags) {
         Long questionId = jdbcTemplate.queryForObject(
                 """
                         INSERT INTO question (
+                            title,
                             requirement,
                             sample_solution,
-                            question_type,
                             difficulty_score,
-                            expected_duration_minutes,
                             question_status,
                             source,
                             created_by,
                             updated_by
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         RETURNING id
                         """,
                 Long.class,
+                "Original title",
                 "Original requirement",
                 "Original solution",
-                QuestionType.DEFINITION.name(),
                 2,
-                5,
                 status.name(),
                 "manu",
                 createdBy,
@@ -426,7 +432,7 @@ public abstract class AbstractIntegrationTest {
 
         for (String conceptTag : conceptTags) {
             jdbcTemplate.update(
-                    "INSERT INTO question_concept (question_id, concept_tag) VALUES (?, ?)",
+                    "INSERT INTO question_concept (question_id, concept_tag, link_status) VALUES (?, ?, 'ACCEPTED')",
                     questionId,
                     conceptTag);
         }
@@ -434,22 +440,56 @@ public abstract class AbstractIntegrationTest {
         return questionId;
     }
 
+    protected ConceptLinkStatus findConceptLinkStatus(Long questionId, String conceptTag) {
+        return jdbcTemplate.queryForObject(
+                "SELECT link_status FROM question_concept WHERE question_id = ? AND concept_tag = ?",
+                (resultSet, rowNum) -> ConceptLinkStatus.valueOf(resultSet.getString("link_status")),
+                questionId,
+                conceptTag);
+    }
+
+    /**
+     * A submitted question whose link to the concept waits for the concept owner's approval
+     * (the concept is switched to OWNER_APPROVAL).
+     */
+    protected Long insertQuestionAwaitingApproval(Long author, String conceptTag) {
+        setContributionPolicy(conceptTag, ContributionPolicy.OWNER_APPROVAL);
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, author, conceptTag);
+        setConceptLinkStatus(questionId, conceptTag, ConceptLinkStatus.PENDING);
+        return questionId;
+    }
+
+    protected Long findConceptLinkDecidedBy(Long questionId, String conceptTag) {
+        return jdbcTemplate.queryForObject(
+                "SELECT decided_by FROM question_concept WHERE question_id = ? AND concept_tag = ?",
+                Long.class,
+                questionId,
+                conceptTag);
+    }
+
+    protected void setConceptLinkStatus(Long questionId, String conceptTag, ConceptLinkStatus status) {
+        jdbcTemplate.update(
+                "UPDATE question_concept SET link_status = ? WHERE question_id = ? AND concept_tag = ?",
+                status.name(),
+                questionId,
+                conceptTag);
+    }
+
     protected Question findQuestionById(Long id) {
         return jdbcTemplate.queryForObject(
                 """
-                        SELECT id, requirement, sample_solution, question_type, difficulty_score,
-                               expected_duration_minutes, question_status, source,
+                        SELECT id, title, requirement, sample_solution, difficulty_score,
+                               question_status, source,
                                created_by, updated_by, created_at, updated_at
                         FROM question
                         WHERE id = ?
                         """,
                 (resultSet, rowNum) -> Question.builder()
                         .id(resultSet.getLong("id"))
+                        .title(resultSet.getString("title"))
                         .requirement(resultSet.getString("requirement"))
                         .sampleSolution(resultSet.getString("sample_solution"))
-                        .type(QuestionType.valueOf(resultSet.getString("question_type")))
                         .difficultyScore(resultSet.getInt("difficulty_score"))
-                        .expectedDurationMinutes(resultSet.getInt("expected_duration_minutes"))
                         .status(QuestionStatus.valueOf(resultSet.getString("question_status")))
                         .source(resultSet.getString("source"))
                         .createdBy(resultSet.getLong("created_by"))
@@ -490,6 +530,51 @@ public abstract class AbstractIntegrationTest {
      * what the test is about (permissions, not-found, ...); write the JSON out in full when
      * the payload itself is under test.
      */
+    /** Answers the question as whoever {@link #restClient} is signed in as; returns the answer's id. */
+    protected Long submitAnswer(Long questionId, String answer) {
+        AnswerResponse created = restClient
+                .post()
+                .uri("/learning/answers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("""
+                        {
+                            "questionId": %d,
+                            "answer": "%s"
+                        }
+                        """.formatted(questionId, answer))
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody(AnswerResponse.class)
+                .returnResult()
+                .getResponseBody();
+        return created.getId();
+    }
+
+    protected int countAnswers() {
+        return jdbcTemplate.queryForObject("SELECT count(*) FROM answer", Integer.class);
+    }
+
+    /** Moves an answer back in time, e.g. to make it the one answered longest ago. */
+    protected void setAnsweredAt(Long answerId, Instant answeredAt) {
+        jdbcTemplate.update("UPDATE answer SET answered_at = ? WHERE id = ?", Timestamp.from(answeredAt), answerId);
+    }
+
+    /** Edits a question's text directly, as its author would. */
+    protected void setQuestionRequirement(Long questionId, String requirement) {
+        jdbcTemplate.update("UPDATE question SET requirement = ? WHERE id = ?", requirement, questionId);
+    }
+
+    protected Map<String, Object> findAnswerRow(Long answerId) {
+        return jdbcTemplate.queryForMap(
+                """
+                        SELECT user_id, question_id, answer_text, self_grade, perceived_difficulty,
+                               question_snapshot::text AS question_snapshot
+                        FROM answer
+                        WHERE id = ?
+                        """,
+                answerId);
+    }
+
     protected static String validQuestionJson(String... conceptTags) {
         String tags = Arrays.stream(conceptTags)
                 .map(tag -> "\"" + tag + "\"")
@@ -497,11 +582,10 @@ public abstract class AbstractIntegrationTest {
 
         return """
                 {
+                    "title": "Updated title",
                     "requirement": "Updated requirement",
                     "sampleSolution": "Updated solution",
-                    "type": "GOTCHA",
                     "difficultyScore": 4,
-                    "expectedDurationMinutes": 8,
                     "source": "manu",
                     "conceptTags": [%s]
                 }

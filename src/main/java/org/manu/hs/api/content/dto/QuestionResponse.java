@@ -5,7 +5,6 @@ import lombok.Builder;
 import lombok.Getter;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionStatus;
-import org.manu.hs.domain.question.QuestionType;
 
 import java.time.Instant;
 import java.util.List;
@@ -16,11 +15,10 @@ import java.util.List;
 public class QuestionResponse {
 
     private Long id;
+    private String title;
     private String requirement;
     private String sampleSolution;
-    private QuestionType type;
     private int difficultyScore;
-    private int expectedDurationMinutes;
     private QuestionStatus status;
     private String source;
     private List<String> conceptTags;
@@ -32,11 +30,10 @@ public class QuestionResponse {
     public static QuestionResponse toDto(Question question) {
         return QuestionResponse.builder()
                 .id(question.getId())
+                .title(question.getTitle())
                 .requirement(question.getRequirement())
                 .sampleSolution(question.getSampleSolution())
-                .type(question.getType())
                 .difficultyScore(question.getDifficultyScore())
-                .expectedDurationMinutes(question.getExpectedDurationMinutes())
                 .status(question.getStatus())
                 .source(question.getSource())
                 .conceptTags(List.copyOf(question.getConceptTags()))

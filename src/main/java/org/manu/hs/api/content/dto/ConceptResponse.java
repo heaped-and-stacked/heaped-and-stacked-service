@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Getter;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.concept.ContributionPolicy;
 
 import java.time.Instant;
 import java.util.List;
@@ -20,6 +21,7 @@ public class ConceptResponse {
     private String description;
     private List<String> externalReferences;
     private ConceptStatus status;
+    private ContributionPolicy contributionPolicy;
     private Long createdBy;
     private Long updatedBy;
     private Instant createdAt;
@@ -32,6 +34,7 @@ public class ConceptResponse {
                 .description(concept.getDescription())
                 .externalReferences(List.copyOf(concept.getExternalReferences()))
                 .status(concept.getStatus())
+                .contributionPolicy(concept.getContributionPolicy())
                 .createdBy(concept.getCreatedBy())
                 .updatedBy(concept.getUpdatedBy())
                 .createdAt(concept.getCreatedAt())
