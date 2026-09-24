@@ -1,0 +1,32 @@
+package org.manu.hs.domain.question;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+
+import java.time.Instant;
+import java.util.List;
+
+/**
+ * Model to structure a question, be it free text, code eval, coding implementation
+ */
+@AllArgsConstructor
+@Builder(toBuilder = true)
+@Getter
+public class Question {
+
+    private Long id;
+    private List<String> conceptTags;
+    private String requirement;
+    private String sampleSolution;
+    private QuestionType type;
+    private int difficultyScore;
+    private int expectedDurationMinutes;
+    private QuestionStatus status;
+    private String source;
+    private String createdBy;
+    private String updatedBy;
+    private Instant createdAt;
+    private Instant updatedAt;
+
+}
