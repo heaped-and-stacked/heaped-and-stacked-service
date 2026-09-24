@@ -1,0 +1,283 @@
+package org.manu.hs.integration.question;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.manu.hs.api.content.dto.QuestionResponse;
+import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.question.Question;
+import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.user.UserRole;
+import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.client.RestTestClient;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
+/**
+ * PUT /content/questions/{id}/status
+ */
+@ExtendWith(OutputCaptureExtension.class)
+class UpdateQuestionStatusTest extends AbstractIntegrationTest {
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource({
+            "SUBMITTED,  SUBMITTED",
+            "SUBMITTED,  RETIRED",
+            "RETIRED, SUBMITTED",
+            "RETIRED, RETIRED"
+    })
+    @DisplayName("""
+            Given the caller is an admin
+            When a PUT request is sent to the question status endpoint with any target status
+            Then the status is changed (setting the same status again is allowed) and the admin is recorded as updater
+            """)
+    void updateQuestionStatusReturnsOkForAnyTransitionWhenCallerIsAdmin(QuestionStatus from, QuestionStatus to) {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(from, AUTHOR, "java-core");
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus(questionId, to.name());
+
+        // Then
+        QuestionResponse updatedQuestion = response
+                .expectStatus().isOk()
+                .expectBody(QuestionResponse.class)
+                .returnResult()
+                .getResponseBody();
+
+        assertNotNull(updatedQuestion);
+        assertEquals(to, updatedQuestion.getStatus());
+        assertEquals(ADMIN, updatedQuestion.getUpdatedBy());
+
+        // Verify database entry
+        Question dbRecord = findQuestionById(questionId);
+        assertEquals(to, dbRecord.getStatus());
+        assertEquals(ADMIN, dbRecord.getUpdatedBy());
+        assertEquals(AUTHOR, dbRecord.getCreatedBy());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a benched question linked to a concept that is still a draft
+            When an admin sets the question status back to SUBMITTED
+            Then a conflict is returned and the question stays benched
+            """)
+    void updateQuestionStatusReturnsConflictWhenSubmittingWithDraftConcept() {
+        // Given
+        insertConcept("java-core");
+        insertConcept("java-records", ConceptStatus.DRAFT);
+        Long questionId = insertQuestion(QuestionStatus.RETIRED, AUTHOR, "java-core", "java-records");
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus(questionId, "SUBMITTED");
+
+        // Then
+        response
+                .expectStatus().isEqualTo(HttpStatus.CONFLICT)
+                .expectBody()
+                .jsonPath("$.message")
+                .isEqualTo("A question can't be submitted while these concepts are drafts: java-records");
+
+        assertEquals(QuestionStatus.RETIRED, findQuestionById(questionId).getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a submitted question linked to a concept that is still a draft
+            When an admin retires (benches) it
+            Then the status is changed, since only submitting requires published concepts
+            """)
+    void updateQuestionStatusReturnsOkWhenLeavingSubmittedWithDraftConcept() {
+        final QuestionStatus target = QuestionStatus.RETIRED;
+        // Given
+        insertConcept("java-records", ConceptStatus.DRAFT);
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-records");
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus(questionId, target.name());
+
+        // Then
+        response.expectStatus().isOk();
+
+        assertEquals(target, findQuestionById(questionId).getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a benched question linked to a retired concept
+            When an admin sets the question status back to SUBMITTED
+            Then the status is changed, since only draft concepts block submitting
+            """)
+    void updateQuestionStatusReturnsOkWhenSubmittingWithRetiredConcept() {
+        // Given
+        insertConcept("java-core", ConceptStatus.RETIRED);
+        Long questionId = insertQuestion(QuestionStatus.RETIRED, AUTHOR, "java-core");
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus(questionId, "SUBMITTED");
+
+        // Then
+        response.expectStatus().isOk();
+
+        assertEquals(QuestionStatus.SUBMITTED, findQuestionById(questionId).getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given the caller is not an admin, even though they are the author
+            When a PUT request is sent to the question status endpoint
+            Then a forbidden response is returned and the status is unchanged
+            """)
+    void updateQuestionStatusReturnsForbiddenWhenCallerIsNotAdmin() {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus(questionId, "RETIRED");
+
+        // Then
+        response.expectStatus().isForbidden();
+
+        assertEquals(QuestionStatus.SUBMITTED, findQuestionById(questionId).getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given no question exists for the given id and the caller is not an admin
+            When a PUT request is sent to the question status endpoint
+            Then a not found response is returned, before permissions are checked
+            """)
+    void updateQuestionStatusReturnsNotFoundWhenQuestionDoesNotExist() {
+        // Given
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus(999_999L, "SUBMITTED");
+
+        // Then
+        response.expectStatus().isNotFound();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a payload without a status
+            When an admin sends a PUT request to the question status endpoint
+            Then a bad request is returned and the status is unchanged
+            """)
+    void updateQuestionStatusReturnsBadRequestWhenStatusIsMissing() {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = restClient
+                .put()
+                .uri("/content/questions/{id}/status", questionId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{}")
+                .exchange();
+
+        // Then
+        response
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.message")
+                .isEqualTo("status is required");
+
+        assertEquals(QuestionStatus.SUBMITTED, findQuestionById(questionId).getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a payload with a status that does not exist
+            When an admin sends a PUT request to the question status endpoint
+            Then a bad request is returned with a message
+            """)
+    void updateQuestionStatusReturnsBadRequestWhenStatusIsUnknown() {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus(questionId, "LIVE");
+
+        // Then
+        response
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.message").isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a submitted question by a member
+            When gym staff bench it (RETIRED)
+            Then the status is changed and staff are recorded as updater
+            """)
+    void updateQuestionStatusReturnsOkWhenStaffBenchesQuestion() {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus(questionId, "RETIRED");
+
+        // Then
+        response.expectStatus().isOk();
+
+        Question dbRecord = findQuestionById(questionId);
+        assertEquals(QuestionStatus.RETIRED, dbRecord.getStatus());
+        assertEquals(STAFF, dbRecord.getUpdatedBy());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a submitted question
+            When an admin benches it (RETIRED)
+            Then the audit log records who changed which question's status, and to what
+            """)
+    void questionStatusChangeIsAudited(CapturedOutput output) {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        actingAs(ADMIN);
+
+        // When
+        updateStatus(questionId, "RETIRED").expectStatus().isOk();
+
+        // Then
+        assertTrue(output.getAll().contains("question_status_changed by=1003 question=%d status=RETIRED".formatted(questionId)));
+    }
+
+    private RestTestClient.ResponseSpec updateStatus(Long questionId, String status) {
+        return restClient
+                .put()
+                .uri("/content/questions/{id}/status", questionId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("""
+                        {
+                            "status": "%s"
+                        }
+                        """.formatted(status))
+                .exchange();
+    }
+}
