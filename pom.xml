@@ -4,7 +4,9 @@
     <artifactId>heaped-and-stacked-service</artifactId>
     <name>heaped-and-stacked-service</name>
     <groupId>org.manu.hs</groupId>
-    <version>1.0-SNAPSHOT</version>
+    <!-- Set per build without editing this file: mvn package -Drevision=1.0.0 (the Docker image
+         passes APP_VERSION). The API logs it at startup. -->
+    <version>${revision}</version>
 
     <parent>
         <groupId>org.springframework.boot</groupId>
@@ -14,6 +16,7 @@
     </parent>
 
     <properties>
+        <revision>1.0-SNAPSHOT</revision>
         <java.version>21</java.version>
         <!-- springdoc 3.x is the line for Spring Boot 4; 3.1.x is built against Boot 4.1. -->
         <springdoc.version>3.1.1</springdoc.version>
@@ -39,6 +42,13 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-session-jdbc</artifactId>
+        </dependency>
+
+        <!-- GET /actuator/health for container healthchecks and uptime monitors. Only health is
+             exposed, without details; see application.properties. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
         <!-- OpenAPI description of the API (/v3/api-docs) and Swagger UI (/swagger-ui.html),
@@ -110,6 +120,15 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <executions>
+                    <!-- META-INF/build-info.properties: the version and build time the API logs
+                         at startup (StartupLogger). -->
+                    <execution>
+                        <goals>
+                            <goal>build-info</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

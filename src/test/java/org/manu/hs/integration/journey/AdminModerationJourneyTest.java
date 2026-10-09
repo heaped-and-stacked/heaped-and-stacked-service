@@ -69,7 +69,7 @@ class AdminModerationJourneyTest extends AbstractIntegrationTest {
         changeStatus(memberId, "BLOCKED");
 
         // Then: they are signed out and can't sign in again
-        membersBrowser.get().uri("/content/concepts").exchange()
+        membersBrowser.get().uri("/users/me").exchange()
                 .expectStatus().isUnauthorized();
         assertThrows(UserNotActiveException.class, () -> signInWithGitHub("5001", "troublemaker"));
 
@@ -78,7 +78,7 @@ class AdminModerationJourneyTest extends AbstractIntegrationTest {
 
         // Then: they can sign in and use the platform again
         signInWithGitHub("5001", "troublemaker")
-                .get().uri("/content/concepts").exchange()
+                .get().uri("/users/me").exchange()
                 .expectStatus().isOk();
     }
 

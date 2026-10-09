@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.manu.hs.api.content.dto.ConceptResponse;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.test.web.servlet.client.RestTestClient;
@@ -21,9 +22,9 @@ class GetConceptsTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
-            Given concepts exist in the system
+            Given concepts exist in the system, one of them the caller's draft
             When a GET request is sent to the concepts endpoint
-            Then all concepts are returned ordered by tag, with their status, with HTTP 200
+            Then all of them are returned ordered by tag, with their status, with HTTP 200
             """)
     void getConceptsReturnsAllConceptsWhenConceptsExist() {
         // Given
@@ -68,6 +69,75 @@ class GetConceptsTest extends AbstractIntegrationTest {
 
         assertNotNull(concepts);
         assertTrue(concepts.isEmpty());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a published and a retired concept, and a draft owned by someone else
+            When a visitor who is not signed in sends a GET request to the concepts endpoint
+            Then only the published and retired concepts are returned: drafts stay private
+            """)
+    void getConceptsHidesDraftsFromVisitors() {
+        // Given
+        insertConcept("spring-boot", ConceptStatus.ACTIVE);
+        insertConcept("java-applets", ConceptStatus.RETIRED);
+        insertConcept("java-core", ConceptStatus.DRAFT);
+        actingAsVisitor();
+
+        // When
+        RestTestClient.ResponseSpec response = getConcepts();
+
+        // Then
+        assertEquals(List.of("java-applets", "spring-boot"), tagsOf(response));
+    }
+
+    @Test
+    @DisplayName("""
+            Given draft concepts owned by the caller and by someone else
+            When a member sends a GET request to the concepts endpoint
+            Then their own draft is returned, someone else's isn't
+            """)
+    void getConceptsReturnsOnlyOwnDraftsToMembers() {
+        // Given
+        insertConcept("java-core", "Java Core", "Fundamentals", List.of(), ConceptStatus.DRAFT, AUTHOR);
+        insertConcept("java-generics", "Java Generics", "Generics", List.of(), ConceptStatus.DRAFT, OTHER_USER);
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = getConcepts();
+
+        // Then
+        assertEquals(List.of("java-generics"), tagsOf(response));
+    }
+
+    @Test
+    @DisplayName("""
+            Given a draft concept owned by a member
+            When gym staff send a GET request to the concepts endpoint
+            Then the draft is returned, as staff curate every concept
+            """)
+    void getConceptsReturnsEveryDraftToStaff() {
+        // Given
+        insertConcept("java-core", ConceptStatus.DRAFT);
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = getConcepts();
+
+        // Then
+        assertEquals(List.of("java-core"), tagsOf(response));
+    }
+
+    private static List<String> tagsOf(RestTestClient.ResponseSpec response) {
+        List<ConceptResponse> concepts = response
+                .expectStatus().isOk()
+                .expectBody(new ParameterizedTypeReference<List<ConceptResponse>>() {
+                })
+                .returnResult()
+                .getResponseBody();
+        assertNotNull(concepts);
+        return concepts.stream().map(ConceptResponse::getTag).toList();
     }
 
     private RestTestClient.ResponseSpec getConcepts() {

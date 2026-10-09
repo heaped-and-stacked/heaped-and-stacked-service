@@ -2,6 +2,7 @@ package org.manu.hs.integration.question;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -9,17 +10,22 @@ import org.manu.hs.api.content.dto.QuestionResponse;
 import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * PUT /content/questions/{id}/status
  */
+@ExtendWith(OutputCaptureExtension.class)
 class UpdateQuestionStatusTest extends AbstractIntegrationTest {
 
     @ParameterizedTest(name = "{0} -> {1}")
@@ -223,6 +229,49 @@ class UpdateQuestionStatusTest extends AbstractIntegrationTest {
                 .expectStatus().isBadRequest()
                 .expectBody()
                 .jsonPath("$.message").isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a submitted question by a member
+            When gym staff bench it (RETIRED)
+            Then the status is changed and staff are recorded as updater
+            """)
+    void updateQuestionStatusReturnsOkWhenStaffBenchesQuestion() {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus(questionId, "RETIRED");
+
+        // Then
+        response.expectStatus().isOk();
+
+        Question dbRecord = findQuestionById(questionId);
+        assertEquals(QuestionStatus.RETIRED, dbRecord.getStatus());
+        assertEquals(STAFF, dbRecord.getUpdatedBy());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a submitted question
+            When an admin benches it (RETIRED)
+            Then the audit log records who changed which question's status, and to what
+            """)
+    void questionStatusChangeIsAudited(CapturedOutput output) {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        actingAs(ADMIN);
+
+        // When
+        updateStatus(questionId, "RETIRED").expectStatus().isOk();
+
+        // Then
+        assertTrue(output.getAll().contains("question_status_changed by=1003 question=%d status=RETIRED".formatted(questionId)));
     }
 
     private RestTestClient.ResponseSpec updateStatus(Long questionId, String status) {

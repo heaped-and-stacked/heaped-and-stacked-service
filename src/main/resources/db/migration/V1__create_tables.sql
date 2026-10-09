@@ -30,7 +30,7 @@ CREATE TABLE app_user (
     deleted_at TIMESTAMPTZ,
 
     CONSTRAINT chk_app_user_role
-        CHECK (user_role IN ('MEMBER', 'ADMIN')),
+        CHECK (user_role IN ('MEMBER', 'STAFF', 'ADMIN')),
 
     CONSTRAINT chk_app_user_status
         CHECK (user_status IN ('ACTIVE', 'BLOCKED', 'DELETED')),
@@ -123,8 +123,14 @@ CREATE TABLE concept (
     CONSTRAINT chk_concept_description_not_blank
         CHECK (btrim(description) <> ''),
 
+    CONSTRAINT chk_concept_description_length
+        CHECK (char_length(description) <= 2000),
+
     CONSTRAINT chk_concept_external_references_array
         CHECK (jsonb_typeof(external_references) = 'array'),
+
+    CONSTRAINT chk_concept_external_references_count
+        CHECK (jsonb_array_length(external_references) <= 20),
 
     -- Users are only soft deleted, so these references always stay valid.
     CONSTRAINT fk_concept_created_by
@@ -168,6 +174,12 @@ CREATE TABLE question (
 
     CONSTRAINT chk_question_sample_solution_not_blank
         CHECK (btrim(sample_solution) <> ''),
+
+    CONSTRAINT chk_question_requirement_length
+        CHECK (char_length(requirement) <= 10000),
+
+    CONSTRAINT chk_question_sample_solution_length
+        CHECK (char_length(sample_solution) <= 10000),
 
     CONSTRAINT chk_question_status
         CHECK (question_status IN ('DRAFT', 'SUBMITTED', 'RETIRED')),
@@ -258,6 +270,9 @@ CREATE TABLE answer (
     CONSTRAINT chk_answer_text_not_blank
         CHECK (btrim(answer_text) <> ''),
 
+    CONSTRAINT chk_answer_text_length
+        CHECK (char_length(answer_text) <= 10000),
+
     CONSTRAINT chk_answer_self_grade_range
         CHECK (self_grade BETWEEN 1 AND 10),
 
@@ -288,6 +303,91 @@ CREATE INDEX idx_answer_user_question
 -- Backs the "has answers" check before deleting a question (the index above starts with user_id).
 CREATE INDEX idx_answer_question_id
     ON answer (question_id);
+
+-- ---------------------------------------------------------------------
+-- Feedback: learners report questions that are wrong or unsuitable, and vote on them
+-- ---------------------------------------------------------------------
+
+-- A learner's feedback on a question: praise, or a problem (wrong, unclear, a duplicate,
+-- inappropriate). The question's author, the owner of one of its concepts, or an admin
+-- resolves or dismisses it.
+-- While a question has 3 or more open problem reports, it isn't served to learners; praise
+-- never holds it back.
+CREATE TABLE question_report (
+    id BIGSERIAL PRIMARY KEY,
+    question_id BIGINT NOT NULL,
+    reported_by BIGINT NOT NULL,
+    reason VARCHAR(20) NOT NULL,
+    -- What's wrong, in the learner's words, or a suggested fix. Optional.
+    note VARCHAR(2000),
+    report_status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+    resolved_by BIGINT,
+    resolved_at TIMESTAMPTZ,
+    reported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT chk_question_report_reason
+        CHECK (reason IN ('PRAISE', 'WRONG', 'UNCLEAR', 'DUPLICATE', 'INAPPROPRIATE', 'OTHER')),
+
+    CONSTRAINT chk_question_report_status
+        CHECK (report_status IN ('OPEN', 'RESOLVED', 'DISMISSED')),
+
+    -- An open report has no decision yet; a closed one always says who closed it and when.
+    CONSTRAINT chk_question_report_open_undecided
+        CHECK ((report_status = 'OPEN') = (resolved_by IS NULL)
+           AND (report_status = 'OPEN') = (resolved_at IS NULL)),
+
+    -- Deleting a question removes its reports.
+    CONSTRAINT fk_question_report_question
+        FOREIGN KEY (question_id)
+        REFERENCES question (id)
+        ON DELETE CASCADE,
+
+    -- Users are only soft deleted, so these references always stay valid.
+    CONSTRAINT fk_question_report_reported_by
+        FOREIGN KEY (reported_by)
+        REFERENCES app_user (id),
+
+    CONSTRAINT fk_question_report_resolved_by
+        FOREIGN KEY (resolved_by)
+        REFERENCES app_user (id)
+);
+
+-- One open report per learner and question: a learner can't push a question out of rotation
+-- on their own. Once it's closed, they may report it again.
+CREATE UNIQUE INDEX uk_question_report_open_per_reporter
+    ON question_report (question_id, reported_by)
+    WHERE report_status = 'OPEN';
+
+-- Backs counting a question's open reports when picking questions to serve.
+CREATE INDEX idx_question_report_question_status
+    ON question_report (question_id, report_status);
+
+-- A learner's thumbs up or down on a question: one per learner and question, changeable.
+-- Shown to the question's author. Ups count as likes, which make a question come up a little
+-- more often when picking the next one (QuestionJdbcRepository, LIKES).
+CREATE TABLE question_vote (
+    question_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    vote VARCHAR(10) NOT NULL,
+    voted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT pk_question_vote
+        PRIMARY KEY (question_id, user_id),
+
+    CONSTRAINT chk_question_vote_vote
+        CHECK (vote IN ('UP', 'DOWN')),
+
+    -- Deleting a question removes its votes.
+    CONSTRAINT fk_question_vote_question
+        FOREIGN KEY (question_id)
+        REFERENCES question (id)
+        ON DELETE CASCADE,
+
+    -- Users are only soft deleted, so this reference always stays valid.
+    CONSTRAINT fk_question_vote_user
+        FOREIGN KEY (user_id)
+        REFERENCES app_user (id)
+);
 
 -- ---------------------------------------------------------------------
 -- HTTP sessions (Spring Session JDBC)

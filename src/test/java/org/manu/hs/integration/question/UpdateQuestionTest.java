@@ -8,6 +8,7 @@ import org.manu.hs.domain.concept.ContributionPolicy;
 import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -172,6 +173,36 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
+            Given a question accepted for one concept and declined for another by that concept's owner
+            When its author removes the declined concept in one edit and adds it back in the next
+            Then the decline stands: a declined concept drops off the question for good, so edits
+            can't undo an owner's decision
+            """)
+    void updateQuestionCantUndoADecline() {
+        // Given
+        insertConcept("java-core");
+        insertConcept("java-generics");
+        setContributionPolicy("java-generics", ContributionPolicy.OWNER_APPROVAL);
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, OTHER_USER, "java-core", "java-generics");
+        setConceptLinkStatus(questionId, "java-generics", ConceptLinkStatus.DECLINED);
+        actingAs(OTHER_USER);
+
+        // When
+        update(questionId, validQuestionJson("java-core")).expectStatus().isOk();
+        RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core", "java-generics"));
+
+        // Then
+        response
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.conceptTags.length()").isEqualTo(1)
+                .jsonPath("$.conceptTags[0]").isEqualTo("java-core");
+
+        assertEquals(ConceptLinkStatus.DECLINED, findConceptLinkStatus(questionId, "java-generics"));
+    }
+
+    @Test
+    @DisplayName("""
             Given an admin links a submitted question to a concept that is still a draft
             When a PUT request is sent to the questions endpoint
             Then a conflict is returned and the question is unchanged
@@ -302,6 +333,31 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
         Question unchanged = findQuestionById(questionId);
         assertEquals("Original requirement", unchanged.getRequirement());
         assertEquals(List.of("java-core"), findConceptTagsForQuestion(questionId));
+    }
+
+    @Test
+    @DisplayName("""
+            Given a submitted question by a member
+            When gym staff send a PUT request to the questions endpoint for it
+            Then the question is updated, keeps its author, and records staff as updater
+            """)
+    void updateQuestionReturnsOkWhenStaffEditsAnyQuestion() {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core"));
+
+        // Then
+        response.expectStatus().isOk();
+
+        Question dbRecord = findQuestionById(questionId);
+        assertEquals("Updated title", dbRecord.getTitle());
+        assertEquals(AUTHOR, dbRecord.getCreatedBy());
+        assertEquals(STAFF, dbRecord.getUpdatedBy());
     }
 
     private RestTestClient.ResponseSpec update(Long questionId, String requestBody) {

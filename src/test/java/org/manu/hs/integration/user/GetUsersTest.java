@@ -154,6 +154,24 @@ class GetUsersTest extends AbstractIntegrationTest {
         response.expectStatus().isUnauthorized();
     }
 
+    @Test
+    @DisplayName("""
+            Given signed-in gym staff, who curate content but don't manage people
+            When a GET request is sent to the admin users endpoint
+            Then a forbidden response is returned
+            """)
+    void getUsersReturnsForbiddenWhenCallerIsStaff() {
+        // Given
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = getUsers("/admin/users");
+
+        // Then
+        response.expectStatus().isForbidden();
+    }
+
     private RestTestClient.ResponseSpec getUsers(String uri) {
         return restClient
                 .get()

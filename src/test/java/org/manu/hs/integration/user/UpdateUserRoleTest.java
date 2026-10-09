@@ -2,20 +2,25 @@ package org.manu.hs.integration.user;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.manu.hs.api.user.dto.UserResponse;
 import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.domain.user.UserStatus;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * PUT /admin/users/{id}/role
  */
+@ExtendWith(OutputCaptureExtension.class)
 class UpdateUserRoleTest extends AbstractIntegrationTest {
 
     @Test
@@ -184,6 +189,83 @@ class UpdateUserRoleTest extends AbstractIntegrationTest {
         response.expectStatus().isForbidden();
 
         assertEquals(UserRole.MEMBER, findUser(AUTHOR).getRole());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a signed-in admin
+            When they make a member gym staff (STAFF)
+            Then the role is changed and the user is returned with HTTP 200
+            """)
+    void updateUserRoleReturnsOkWhenAdminMakesMemberStaff() {
+        // Given
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateRole(AUTHOR, "STAFF");
+
+        // Then
+        response
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.role").isEqualTo("STAFF");
+
+        assertEquals(UserRole.STAFF, findUser(AUTHOR).getRole());
+    }
+
+    @Test
+    @DisplayName("""
+            Given the only active admin
+            When they make themselves gym staff
+            Then a conflict is returned and they stay ADMIN, so the platform always has an admin
+            """)
+    void updateUserRoleReturnsConflictWhenLastAdminBecomesStaff() {
+        // Given
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateRole(ADMIN, "STAFF");
+
+        // Then
+        response.expectStatus().isEqualTo(HttpStatus.CONFLICT);
+
+        assertEquals(UserRole.ADMIN, findUser(ADMIN).getRole());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a signed-in admin
+            When they make a member gym staff
+            Then the audit log records who changed whose role, and to what
+            """)
+    void roleChangeIsAudited(CapturedOutput output) {
+        // Given
+        actingAs(ADMIN);
+
+        // When
+        updateRole(AUTHOR, "STAFF").expectStatus().isOk();
+
+        // Then
+        assertTrue(output.getAll().contains("role_changed by=1003 user=1001 role=STAFF"));
+    }
+
+    @Test
+    @DisplayName("""
+            Given the house account, which owns the gym's content
+            When the admin sends a PUT request to change its role
+            Then a conflict is returned, and its role stays STAFF
+            """)
+    void updateUserRoleRefusesTheHouseAccount() {
+        // Given
+        insertHouseAccount(1005L);
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateRole(1005L, "MEMBER");
+
+        // Then
+        response.expectStatus().isEqualTo(409);
+        assertEquals(UserRole.STAFF, findUser(1005L).getRole());
     }
 
     private RestTestClient.ResponseSpec updateRole(Long userId, String role) {

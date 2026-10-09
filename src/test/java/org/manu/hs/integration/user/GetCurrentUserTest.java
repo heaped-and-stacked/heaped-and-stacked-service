@@ -1,11 +1,13 @@
 package org.manu.hs.integration.user;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.manu.hs.api.user.dto.UserResponse;
+import org.manu.hs.api.user.dto.CurrentUserResponse;
 import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.domain.user.UserStatus;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -30,9 +32,9 @@ class GetCurrentUserTest extends AbstractIntegrationTest {
         RestTestClient.ResponseSpec response = getCurrentUser();
 
         // Then
-        UserResponse user = response
+        CurrentUserResponse user = response
                 .expectStatus().isOk()
-                .expectBody(UserResponse.class)
+                .expectBody(CurrentUserResponse.class)
                 .returnResult()
                 .getResponseBody();
 
@@ -92,5 +94,45 @@ class GetCurrentUserTest extends AbstractIntegrationTest {
                 .get()
                 .uri("/users/me")
                 .exchange();
+    }
+
+    @Test
+    @DisplayName("""
+            Given contributions are open to members (the setting is on)
+            When a signed-in member asks for their profile
+            Then it says they can contribute, so the web app offers ADD buttons
+            """)
+    void getCurrentUserSaysAMemberCanContributeWhenOpen() {
+        // Given
+        actingAs(AUTHOR);
+
+        // When / Then
+        getCurrentUser()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.canContribute").isEqualTo(true);
+    }
+
+    @Nested
+    @TestPropertySource(properties = "app.content.members-contribute=false")
+    class WhenOnlyStaffContribute {
+
+        @Test
+        @DisplayName("""
+                Given contributions are open to staff only
+                When a member and then staff ask for their profile
+                Then the member can't contribute and staff can
+                """)
+        void getCurrentUserSaysOnlyStaffCanContribute() {
+            // Given
+            insertUser(STAFF, UserRole.STAFF);
+            actingAs(AUTHOR);
+
+            // When / Then
+            getCurrentUser().expectStatus().isOk().expectBody().jsonPath("$.canContribute").isEqualTo(false);
+
+            actingAs(STAFF);
+            getCurrentUser().expectStatus().isOk().expectBody().jsonPath("$.canContribute").isEqualTo(true);
+        }
     }
 }

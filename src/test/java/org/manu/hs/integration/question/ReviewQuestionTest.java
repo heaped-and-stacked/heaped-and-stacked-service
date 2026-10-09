@@ -2,20 +2,26 @@ package org.manu.hs.integration.question;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * PUT /content/questions/{id}/concepts/{tag}/review
  */
+@ExtendWith(OutputCaptureExtension.class)
 class ReviewQuestionTest extends AbstractIntegrationTest {
 
     @Test
@@ -155,6 +161,47 @@ class ReviewQuestionTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
+            Given a question that isn't linked to a concept, and a caller who doesn't curate that concept
+            When they send a review for that pair
+            Then a forbidden response is returned, not "not linked": only a concept's curators learn
+            which questions are linked to it
+            """)
+    void reviewQuestionReturnsForbiddenBeforeRevealingWhetherALinkExists() {
+        // Given
+        insertConcept("java-core", "Java Core", "Fundamentals", List.of(), ConceptStatus.ACTIVE, AUTHOR);
+        insertConcept("java-generics", "Java Generics", "Generics", List.of(), ConceptStatus.ACTIVE, AUTHOR);
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = review(questionId, "java-generics", "ACCEPTED");
+
+        // Then
+        response.expectStatus().isForbidden();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a question waiting for approval on a concept
+            When the concept's owner declines it
+            Then the audit log records who decided which question, for which concept, and how
+            """)
+    void reviewDecisionIsAudited(CapturedOutput output) {
+        // Given
+        insertConcept("java-core", "Java Core", "Fundamentals", List.of(), ConceptStatus.ACTIVE, AUTHOR);
+        Long questionId = insertQuestionAwaitingApproval(OTHER_USER, "java-core");
+        actingAs(AUTHOR);
+
+        // When
+        review(questionId, "java-core", "DECLINED").expectStatus().isNoContent();
+
+        // Then
+        assertTrue(output.getAll().contains(
+                "link_decided by=1001 question=%d concept=java-core status=DECLINED".formatted(questionId)));
+    }
+
+    @Test
+    @DisplayName("""
             Given a question waiting for approval
             When its concept's owner sends a review without a status
             Then a bad request is returned and the question keeps waiting
@@ -204,6 +251,29 @@ class ReviewQuestionTest extends AbstractIntegrationTest {
                 .expectBody()
                 .jsonPath("$.message")
                 .isEqualTo("status must be ACCEPTED or DECLINED");
+    }
+
+    @Test
+    @DisplayName("""
+            Given a question waiting for approval on someone else's concept
+            When gym staff accept it
+            Then HTTP 204 is returned and the question is accepted, with staff recorded
+            """)
+    void reviewQuestionReturnsNoContentWhenStaffDecides() {
+        // Given
+        insertConcept("java-core", "Java Core", "Fundamentals", List.of(), ConceptStatus.ACTIVE, AUTHOR);
+        Long questionId = insertQuestionAwaitingApproval(OTHER_USER, "java-core");
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = review(questionId, "java-core", "ACCEPTED");
+
+        // Then
+        response.expectStatus().isNoContent();
+
+        assertEquals(ConceptLinkStatus.ACCEPTED, findConceptLinkStatus(questionId, "java-core"));
+        assertEquals(STAFF, findConceptLinkDecidedBy(questionId, "java-core"));
     }
 
     private RestTestClient.ResponseSpec review(Long questionId, String conceptTag, String status) {

@@ -10,7 +10,7 @@ import java.util.Optional;
 
 /**
  * Who is calling, taken from the signed-in session. A visitor (not signed in) has no
- * user id and is not an admin.
+ * user id and is neither staff nor an admin.
  */
 @Component
 public class SecurityCurrentUserProvider implements CurrentUserProvider {
@@ -26,6 +26,13 @@ public class SecurityCurrentUserProvider implements CurrentUserProvider {
     public boolean isAdmin() {
         return signedInUser()
                 .map(user -> user.getRole() == UserRole.ADMIN)
+                .orElse(false);
+    }
+
+    @Override
+    public boolean isStaff() {
+        return signedInUser()
+                .map(user -> user.getRole().curatesAllContent())
                 .orElse(false);
     }
 

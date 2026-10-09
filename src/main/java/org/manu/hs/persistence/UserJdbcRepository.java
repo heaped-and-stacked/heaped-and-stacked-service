@@ -2,11 +2,13 @@ package org.manu.hs.persistence;
 
 import lombok.RequiredArgsConstructor;
 import org.manu.hs.domain.user.AuthProvider;
+import org.manu.hs.domain.user.Overview;
 import org.manu.hs.domain.user.User;
 import org.manu.hs.domain.user.UserIdentity;
 import org.manu.hs.domain.user.UserRepository;
 import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.domain.user.UserStatus;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -49,11 +51,37 @@ public class UserJdbcRepository implements UserRepository {
                     ORDER BY u.id
                     """;
 
-    private static final String COUNT_ACTIVE_ADMINS = """
-            SELECT COUNT(*)
+    // FOR UPDATE locks the rows counted (Postgres refuses it next to an aggregate, so the ids are
+    // counted in Java). A transaction waiting on the lock re-checks the WHERE after the other one
+    // commits, so it sees an admin demoted meanwhile as no longer counting.
+    private static final String LOCK_ACTIVE_ADMINS = """
+            SELECT id
             FROM app_user
             WHERE user_role = 'ADMIN'
               AND user_status = 'ACTIVE'
+            FOR UPDATE
+            """;
+
+    // The admin overview in one round trip. Users: accounts that aren't deleted, without the house
+    // account, which owns the content and has no sign-in (a member who renamed themselves like it
+    // still has their GitHub login). :since is the start of the last 7 days. Questions awaiting
+    // review: the same filter as QuestionJdbcRepository.SELECT_LINKS_AWAITING_REVIEW, each once.
+    private static final String COUNT_OVERVIEW = """
+            SELECT COUNT(*) AS users,
+                   COUNT(*) FILTER (WHERE u.created_at >= :since) AS new_users_this_week,
+                   (SELECT COUNT(DISTINCT a.user_id) FROM answer a WHERE a.answered_at >= :since)
+                       AS active_users_this_week,
+                   (SELECT COUNT(*) FROM answer a WHERE a.answered_at >= :since) AS answers_this_week,
+                   (SELECT COUNT(*) FROM question_report r WHERE r.report_status = 'OPEN') AS open_reports,
+                   (SELECT COUNT(DISTINCT qc.question_id)
+                      FROM question_concept qc
+                      JOIN question q ON q.id = qc.question_id
+                     WHERE qc.link_status = 'PENDING'
+                       AND q.question_status = 'SUBMITTED') AS questions_awaiting_review
+            FROM app_user u
+            WHERE u.user_status <> 'DELETED'
+              AND (u.display_name IS DISTINCT FROM :house_account_name
+                   OR EXISTS (SELECT 1 FROM user_identity i WHERE i.user_id = u.id))
             """;
 
     private static final String INSERT = """
@@ -62,6 +90,9 @@ public class UserJdbcRepository implements UserRepository {
             RETURNING id
             """;
 
+    // Optimistic locking: the row is only written if nobody changed it since it was read (the
+    // trigger moves updated_at on every change), so a stale copy can't undo a newer change, such
+    // as a sign-in writing ACTIVE back over a block that landed in between.
     private static final String UPDATE = """
             UPDATE app_user
             SET display_name = :display_name,
@@ -71,6 +102,7 @@ public class UserJdbcRepository implements UserRepository {
                 last_login_at = :last_login_at,
                 deleted_at = :deleted_at
             WHERE id = :id
+              AND updated_at = :read_updated_at
             """;
 
     private static final String IDENTITY_COLUMNS = """
@@ -105,6 +137,18 @@ public class UserJdbcRepository implements UserRepository {
             WHERE user_id = :user_id
             """;
 
+    private static final String HAS_IDENTITY = """
+            SELECT EXISTS (SELECT 1 FROM user_identity WHERE user_id = :user_id)
+            """;
+
+    // Feedback and votes first: nothing refers to them. Feedback this user decided as a coach
+    // stays (resolved_by), as does everything they wrote.
+    private static final String ERASE_ACTIVITY_OF = """
+            DELETE FROM question_report WHERE reported_by = :user_id;
+            DELETE FROM question_vote WHERE user_id = :user_id;
+            DELETE FROM answer WHERE user_id = :user_id;
+            """;
+
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
     // ---------------------------------------------------------------------
@@ -126,11 +170,16 @@ public class UserJdbcRepository implements UserRepository {
 
     @Override
     public User update(User user) {
-        jdbcTemplate.update(
+        final int updated = jdbcTemplate.update(
                 UPDATE,
                 userParameters(user)
                         .addValue("id", user.getId())
-                        .addValue("deleted_at", toTimestamp(user.getDeletedAt())));
+                        .addValue("deleted_at", toTimestamp(user.getDeletedAt()))
+                        .addValue("read_updated_at", toTimestamp(user.getUpdatedAt())));
+        if (updated == 0) {
+            throw new OptimisticLockingFailureException(
+                    "User '%d' was changed by someone else meanwhile".formatted(user.getId()));
+        }
 
         return findById(user.getId())
                 .orElseThrow(() ->
@@ -169,13 +218,25 @@ public class UserJdbcRepository implements UserRepository {
     }
 
     @Override
-    public int countActiveAdmins() {
-        Integer count = jdbcTemplate.queryForObject(
-                COUNT_ACTIVE_ADMINS,
-                Map.of(),
-                Integer.class);
+    public int countActiveAdminsLocking() {
+        return jdbcTemplate.queryForList(LOCK_ACTIVE_ADMINS, Map.of(), Long.class).size();
+    }
 
-        return count == null ? 0 : count;
+    @Override
+    public Overview countOverview(Instant since, String houseAccountName) {
+        return jdbcTemplate.queryForObject(
+                COUNT_OVERVIEW,
+                new MapSqlParameterSource()
+                        .addValue("since", toTimestamp(since))
+                        .addValue("house_account_name", houseAccountName),
+                (resultSet, rowNumber) -> Overview.builder()
+                        .users(resultSet.getInt("users"))
+                        .newUsersThisWeek(resultSet.getInt("new_users_this_week"))
+                        .activeUsersThisWeek(resultSet.getInt("active_users_this_week"))
+                        .answersThisWeek(resultSet.getInt("answers_this_week"))
+                        .openReports(resultSet.getInt("open_reports"))
+                        .questionsAwaitingReview(resultSet.getInt("questions_awaiting_review"))
+                        .build());
     }
 
     // ---------------------------------------------------------------------
@@ -223,6 +284,21 @@ public class UserJdbcRepository implements UserRepository {
     public void deleteIdentitiesOf(Long userId) {
         jdbcTemplate.update(
                 DELETE_IDENTITIES_OF,
+                Map.of("user_id", userId));
+    }
+
+    @Override
+    public boolean hasIdentity(Long userId) {
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject(
+                HAS_IDENTITY,
+                Map.of("user_id", userId),
+                Boolean.class));
+    }
+
+    @Override
+    public void eraseActivityOf(Long userId) {
+        jdbcTemplate.update(
+                ERASE_ACTIVITY_OF,
                 Map.of("user_id", userId));
     }
 

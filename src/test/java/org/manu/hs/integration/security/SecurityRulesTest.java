@@ -2,10 +2,14 @@ package org.manu.hs.integration.security;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.manu.hs.domain.question.QuestionStatus;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.client.RestTestClient;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Rules that apply to every endpoint: who may call what, CSRF, CORS and signing out.
@@ -17,45 +21,86 @@ class SecurityRulesTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
-            Given a visitor who is not signed in
-            When they read content
-            Then an unauthorized response is returned, as content management requires signing in
+            Given a first-time visitor (or a bot) with no session
+            When they ask for a CSRF token, call endpoints that require signing in, or ones that don't exist
+            Then each is refused, and no sign-in session is created for them,
+            so anonymous traffic can't fill the session table
             """)
-    void contentReturnsUnauthorizedWhenVisitor() {
+    void refusedAnonymousRequestsCreateNoSession() {
         // Given
-        actingAsVisitor();
+        int sessionsBefore = countSessions();
 
-        // When
-        RestTestClient.ResponseSpec response = restClient
-                .get()
-                .uri("/content/concepts")
-                .exchange();
+        // When / Then
+        for (String uri : new String[]{"/csrf", "/users/me", "/content/questions/mine", "/admin/users", "/internal/anything"}) {
+            RestTestClient.ResponseSpec response = clientWithoutSession().get().uri(uri).exchange();
+            response
+                    .expectStatus().value(status -> assertEquals(true, status == 401 || status == 403, uri))
+                    .expectHeader().doesNotExist(HttpHeaders.SET_COOKIE);
+        }
 
-        // Then
-        response
-                .expectStatus().isUnauthorized()
-                .expectBody()
-                .jsonPath("$.message").isEqualTo("Sign in required");
+        assertEquals(sessionsBefore, countSessions());
     }
 
     @Test
     @DisplayName("""
             Given a visitor who is not signed in
-            When they ask for questions to train on
-            Then an unauthorized response is returned, as learning requires signing in for now
+            When they list the concepts and ask for a question to train on
+            Then both are allowed, so visitors can try a workout before signing in
             """)
-    void learningReturnsUnauthorizedWhenVisitor() {
+    void conceptsAndNextQuestionAreOpenToVisitors() {
         // Given
+        actingAsVisitor();
+
+        // When / Then
+        restClient.get().uri("/content/concepts").exchange().expectStatus().isOk();
+        restClient.get().uri("/learning/questions/next").exchange().expectStatus().isNoContent();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a visitor who is not signed in
+            When they read anything else under content or learning
+            Then an unauthorized response is returned, as the rest requires signing in
+            """)
+    void otherContentAndLearningReadsReturnUnauthorizedWhenVisitor() {
+        // Given
+        actingAsVisitor();
+
+        // When / Then
+        for (String uri : new String[]{"/content/questions/mine", "/content/reviews", "/content/reports", "/learning/answers"}) {
+            restClient.get().uri(uri).exchange()
+                    .expectStatus().isUnauthorized()
+                    .expectBody()
+                    .jsonPath("$.message").isEqualTo("Sign in required");
+        }
+    }
+
+    @Test
+    @DisplayName("""
+            Given a visitor who is not signed in
+            When they submit an answer
+            Then an unauthorized response is returned, as saving a set (and seeing the model answer)
+            requires signing in
+            """)
+    void submittingAnAnswerReturnsUnauthorizedWhenVisitor() {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
         actingAsVisitor();
 
         // When
         RestTestClient.ResponseSpec response = restClient
-                .get()
-                .uri("/learning/questions/next")
+                .post()
+                .uri("/learning/answers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("""
+                        { "questionId": %d, "answer": "It prints 1" }
+                        """.formatted(questionId))
                 .exchange();
 
         // Then
         response.expectStatus().isUnauthorized();
+        assertEquals(0, countAnswers());
     }
 
     @Test
@@ -147,6 +192,35 @@ class SecurityRulesTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
+            Given a visitor who is not signed in
+            When they start signing in with GitHub
+            Then they're sent to GitHub with prompt=select_account, so GitHub shows its account picker
+            instead of silently using the account already signed in to github.com
+            (and the picker leaves PKCE on: the redirect still carries the code challenge)
+            """)
+    void signingInAsksGitHubToShowTheAccountPicker() {
+        // Given
+        RestTestClient client = clientWithoutSession();
+
+        // When
+        RestTestClient.ResponseSpec response = client
+                .get()
+                .uri("/oauth2/authorization/github")
+                .exchange();
+
+        // Then
+        response
+                .expectStatus().is3xxRedirection()
+                .expectHeader().value(HttpHeaders.LOCATION, location -> {
+                    assertTrue(location.startsWith("https://github.com/login/oauth/authorize?"), location);
+                    assertTrue(location.contains("prompt=select_account"), location);
+                    assertTrue(location.contains("code_challenge="), location);
+                    assertTrue(location.contains("code_challenge_method=S256"), location);
+                });
+    }
+
+    @Test
+    @DisplayName("""
             Given a visitor who is not signed in and API docs are enabled
             When they request the OpenAPI description
             Then it is returned, names the API and describes its endpoints,
@@ -176,7 +250,7 @@ class SecurityRulesTest extends AbstractIntegrationTest {
     @DisplayName("""
             Given the UI's origin
             When the browser checks whether it may call the API (CORS preflight)
-            Then the API allows it, including the session cookie
+            Then the API allows it, including the session cookie, and lets the browser reuse the answer for an hour
             """)
     void corsPreflightIsAllowedForTheUi() {
         // When
@@ -191,7 +265,8 @@ class SecurityRulesTest extends AbstractIntegrationTest {
         response
                 .expectStatus().isOk()
                 .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, UI_ORIGIN)
-                .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
+                .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true")
+                .expectHeader().valueEquals(HttpHeaders.ACCESS_CONTROL_MAX_AGE, "3600");
     }
 
     @Test

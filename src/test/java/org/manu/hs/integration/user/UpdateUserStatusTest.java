@@ -2,18 +2,23 @@ package org.manu.hs.integration.user;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.domain.user.UserStatus;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * PUT /admin/users/{id}/status
  */
+@ExtendWith(OutputCaptureExtension.class)
 class UpdateUserStatusTest extends AbstractIntegrationTest {
 
     @Test
@@ -55,7 +60,7 @@ class UpdateUserStatusTest extends AbstractIntegrationTest {
         // Then
         membersBrowser
                 .get()
-                .uri("/content/concepts")
+                .uri("/users/me")
                 .exchange()
                 .expectStatus().isUnauthorized();
     }
@@ -152,6 +157,44 @@ class UpdateUserStatusTest extends AbstractIntegrationTest {
         response.expectStatus().isForbidden();
 
         assertEquals(UserStatus.ACTIVE, findUser(OTHER_USER).getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a signed-in admin
+            When they block a member, then unblock them
+            Then the audit log records both, with who did it
+            """)
+    void statusChangeIsAudited(CapturedOutput output) {
+        // Given
+        actingAs(ADMIN);
+
+        // When
+        updateStatus(AUTHOR, "BLOCKED").expectStatus().isOk();
+        updateStatus(AUTHOR, "ACTIVE").expectStatus().isOk();
+
+        // Then
+        assertTrue(output.getAll().contains("status_changed by=1003 user=1001 status=BLOCKED"));
+        assertTrue(output.getAll().contains("status_changed by=1003 user=1001 status=ACTIVE"));
+    }
+
+    @Test
+    @DisplayName("""
+            Given the house account, which owns the gym's content
+            When the admin sends a PUT request to block it
+            Then a conflict is returned, and it stays active
+            """)
+    void updateUserStatusRefusesTheHouseAccount() {
+        // Given
+        insertHouseAccount(1005L);
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus(1005L, "BLOCKED");
+
+        // Then
+        response.expectStatus().isEqualTo(409);
+        assertEquals(UserStatus.ACTIVE, findUser(1005L).getStatus());
     }
 
     private RestTestClient.ResponseSpec updateStatus(Long userId, String status) {

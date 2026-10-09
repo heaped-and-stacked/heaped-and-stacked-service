@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.manu.hs.api.content.dto.ReviewResponse;
 import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.test.web.servlet.client.RestTestClient;
@@ -85,6 +86,29 @@ class GetReviewsTest extends AbstractIntegrationTest {
 
         // Then
         assertEquals(List.of(), reviews);
+    }
+
+    @Test
+    @DisplayName("""
+            Given questions waiting for approval on concepts of different owners
+            When gym staff send a GET request to the reviews endpoint
+            Then every waiting question is returned, whoever owns the concept
+            """)
+    void getReviewsReturnsEveryWaitingQuestionWhenCallerIsStaff() {
+        // Given
+        insertConcept("java-core", "Java Core", "Fundamentals", List.of(), ConceptStatus.ACTIVE, AUTHOR);
+        insertConcept("java-generics", "Java Generics", "Generics", List.of(), ConceptStatus.ACTIVE, OTHER_USER);
+        Long waitingOnCore = insertQuestionAwaitingApproval(OTHER_USER, "java-core");
+        Long waitingOnGenerics = insertQuestionAwaitingApproval(AUTHOR, "java-generics");
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        List<ReviewResponse> reviews = getReviews();
+
+        // Then
+        assertEquals(List.of(waitingOnCore, waitingOnGenerics),
+                reviews.stream().map(review -> review.getQuestion().getId()).toList());
     }
 
     private List<ReviewResponse> getReviews() {

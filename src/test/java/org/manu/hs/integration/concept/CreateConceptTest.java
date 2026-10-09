@@ -1,14 +1,17 @@
 package org.manu.hs.integration.concept;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.manu.hs.api.content.dto.ConceptResponse;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.concept.ContributionPolicy;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import java.util.List;
@@ -210,6 +213,89 @@ class CreateConceptTest extends AbstractIntegrationTest {
         assertConceptDoesNotExist("Java Core!");
     }
 
+    /** The launch setting: only staff publish concepts (MEMBERS_PUBLISH_MUSCLES=false). */
+    @Nested
+    @TestPropertySource(properties = "app.content.members-publish-concepts=false")
+    class WhenOnlyStaffPublish {
+
+        @Test
+        @DisplayName("""
+                Given only staff publish concepts
+                When a member creates a concept
+                Then it is created as a DRAFT, waiting for staff to publish it
+                """)
+        void createConceptStartsAsDraftWhenMemberCreatesIt() {
+            // Given
+            actingAs(AUTHOR);
+
+            // When
+            RestTestClient.ResponseSpec response = create(MINIMAL_CONCEPT);
+
+            // Then
+            response.expectStatus().isCreated();
+
+            assertEquals(ConceptStatus.DRAFT, findConceptByTag("java-core").getStatus());
+        }
+
+        @Test
+        @DisplayName("""
+                Given only staff publish concepts, and a member's draft concept
+                When the member tries to publish it
+                Then a forbidden response is returned and it stays a draft
+                """)
+        void ownerCannotPublishWhenOnlyStaffPublish() {
+            // Given
+            actingAs(AUTHOR);
+            create(MINIMAL_CONCEPT).expectStatus().isCreated();
+
+            // When
+            RestTestClient.ResponseSpec response = restClient
+                    .put()
+                    .uri("/content/concepts/{tag}/status", "java-core")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body("""
+                            { "status": "ACTIVE" }
+                            """)
+                    .exchange();
+
+            // Then
+            response
+                    .expectStatus().isForbidden()
+                    .expectBody()
+                    .jsonPath("$.message").isEqualTo("Only staff may publish a concept");
+
+            assertEquals(ConceptStatus.DRAFT, findConceptByTag("java-core").getStatus());
+        }
+
+        @Test
+        @DisplayName("""
+                Given only staff publish concepts
+                When gym staff create a concept
+                Then it is published (ACTIVE) straight away
+                """)
+        void createConceptIsPublishedWhenStaffCreateIt() {
+            // Given
+            insertUser(STAFF, UserRole.STAFF);
+            actingAs(STAFF);
+
+            // When
+            RestTestClient.ResponseSpec response = create(MINIMAL_CONCEPT);
+
+            // Then
+            response.expectStatus().isCreated();
+
+            assertEquals(ConceptStatus.ACTIVE, findConceptByTag("java-core").getStatus());
+        }
+    }
+
+    private static final String MINIMAL_CONCEPT = """
+            {
+                "tag": "java-core",
+                "name": "Java Core",
+                "description": "Fundamentals"
+            }
+            """;
+
     private RestTestClient.ResponseSpec create(String requestBody) {
         return restClient
                 .post()
@@ -217,5 +303,47 @@ class CreateConceptTest extends AbstractIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(requestBody)
                 .exchange();
+    }
+
+    @Nested
+    @TestPropertySource(properties = "app.content.members-contribute=false")
+    class WhenOnlyStaffContribute {
+
+        @Test
+        @DisplayName("""
+                Given contributions are open to staff only
+                When a member creates a concept
+                Then a forbidden response is returned and nothing is stored
+                """)
+        void createConceptReturnsForbiddenForAMember() {
+            // Given
+            actingAs(AUTHOR);
+
+            // When
+            RestTestClient.ResponseSpec response = create(MINIMAL_CONCEPT);
+
+            // Then
+            response
+                    .expectStatus().isForbidden()
+                    .expectBody()
+                    .jsonPath("$.message").isEqualTo("Only staff may add concepts and questions for now");
+
+            assertEquals(0, countConcepts());
+        }
+
+        @Test
+        @DisplayName("""
+                Given contributions are open to staff only
+                When staff create a concept
+                Then it is created
+                """)
+        void createConceptStillWorksForStaff() {
+            // Given
+            insertUser(STAFF, UserRole.STAFF);
+            actingAs(STAFF);
+
+            // When / Then
+            create(MINIMAL_CONCEPT).expectStatus().isCreated();
+        }
     }
 }

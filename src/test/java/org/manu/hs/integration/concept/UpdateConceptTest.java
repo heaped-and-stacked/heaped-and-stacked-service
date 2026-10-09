@@ -6,6 +6,7 @@ import org.manu.hs.api.content.dto.ConceptResponse;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.concept.ContributionPolicy;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.client.RestTestClient;
@@ -285,6 +286,32 @@ class UpdateConceptTest extends AbstractIntegrationTest {
                 .isEqualTo("name is required");
 
         assertEquals("Original description", findConceptByTag("java-core").getDescription());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a concept owned by a member
+            When gym staff send a PUT request to the concepts endpoint for it
+            Then the concept is updated and returned with HTTP 200, as staff curate every concept
+            """)
+    void updateConceptReturnsOkWhenStaffEditsSomeoneElsesConcept() {
+        // Given
+        insertConcept("java-core", "Java Core", "Original description", List.of(), ConceptStatus.ACTIVE, AUTHOR);
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = update("java-core", """
+                {
+                    "name": "Java Core",
+                    "description": "Fixed by staff"
+                }
+                """);
+
+        // Then
+        response.expectStatus().isOk();
+
+        assertEquals("Fixed by staff", findConceptByTag("java-core").getDescription());
     }
 
     private RestTestClient.ResponseSpec update(String tag, String requestBody) {

@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 /**
- * Hands the UI its CSRF token. The UI runs on another origin, so it can't read the
+ * Hands the UI its CSRF token, signed-in people only. The UI runs on another origin, so it can't read the
  * API's cookies; it calls this once and sends the token back in the named header on
  * every POST, PUT and DELETE.
  */

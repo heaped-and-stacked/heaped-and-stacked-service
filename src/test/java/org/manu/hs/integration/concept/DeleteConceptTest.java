@@ -2,19 +2,25 @@ package org.manu.hs.integration.concept;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * DELETE /content/concepts/{tag}
  */
+@ExtendWith(OutputCaptureExtension.class)
 class DeleteConceptTest extends AbstractIntegrationTest {
 
     @Test
@@ -139,6 +145,45 @@ class DeleteConceptTest extends AbstractIntegrationTest {
                 .expectBody()
                 .jsonPath("$.message")
                 .isEqualTo("Concept with tag 'does-not-exist' not found");
+    }
+
+    @Test
+    @DisplayName("""
+            Given a published concept owned by a member, used by no question
+            When gym staff send a DELETE request for it, e.g. to clear a duplicate
+            Then the concept is deleted and HTTP 204 is returned
+            """)
+    void deleteConceptReturnsNoContentWhenStaffDeletesUnusedConcept() {
+        // Given
+        insertConcept("java-core");
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = delete("java-core");
+
+        // Then
+        response.expectStatus().isNoContent();
+
+        assertConceptDoesNotExist("java-core");
+    }
+
+    @Test
+    @DisplayName("""
+            Given a concept no question uses
+            When an admin deletes it
+            Then the audit log records who deleted which concept
+            """)
+    void conceptDeletionIsAudited(CapturedOutput output) {
+        // Given
+        insertConcept("java-core");
+        actingAs(ADMIN);
+
+        // When
+        delete("java-core").expectStatus().isNoContent();
+
+        // Then
+        assertTrue(output.getAll().contains("concept_deleted by=1003 concept=java-core"));
     }
 
     private RestTestClient.ResponseSpec delete(String tag) {

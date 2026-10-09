@@ -8,7 +8,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.manu.hs.application.common.exception.AdminRequiredException;
+import org.manu.hs.application.common.exception.StaffRequiredException;
 import org.manu.hs.application.common.exception.base.ForbiddenException;
 import org.manu.hs.application.common.exception.base.ValidationException;
 import org.manu.hs.application.content.command.CreateConceptCommand;
@@ -22,6 +22,8 @@ import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.concept.ContributionPolicy;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -39,7 +41,10 @@ import static org.mockito.Mockito.when;
 class ConceptServiceTest {
 
     private final ConceptRepository conceptRepository = mock(ConceptRepository.class);
-    private final ConceptService conceptService = new ConceptService(conceptRepository);
+    /** Members may publish their own concepts (MEMBERS_PUBLISH_MUSCLES=true). */
+    private final ConceptService conceptService = new ConceptService(conceptRepository, true, true);
+    /** Only staff publish concepts (the cautious launch setting). */
+    private final ConceptService staffPublishOnly = new ConceptService(conceptRepository, false, true);
 
     // ---------------------------------------------------------------------
     // Validation
@@ -76,21 +81,44 @@ class ConceptServiceTest {
         assertThrows(InvalidConceptTagException.class, () -> conceptService.validate(command));
     }
 
-    static Stream<Arguments> missingFields() {
+    @Test
+    @DisplayName("""
+            Given a new concept whose tag is kebab-case but longer than 100 characters
+            When it is validated
+            Then it is refused
+            """)
+    void validateRejectsTooLongTag() {
+        // Given
+        CreateConceptCommand command = aCreateCommand().tag("a".repeat(101)).build();
+
+        // When / Then
+        assertThrows(InvalidConceptTagException.class, () -> conceptService.validate(command));
+    }
+
+    static Stream<Arguments> invalidFields() {
         return Stream.of(
                 arguments("name is null", aCreateCommand().name(null).build(), "name is required"),
                 arguments("name is blank", aCreateCommand().name("   ").build(), "name is required"),
-                arguments("description is null", aCreateCommand().description(null).build(), "description is required"));
+                arguments("name is too long", aCreateCommand().name("x".repeat(201)).build(), "name must be at most 200 characters"),
+                arguments("name has a control character", aCreateCommand().name("Java\u0007").build(), "name must be one line without invisible characters"),
+                arguments("description is null", aCreateCommand().description(null).build(), "description is required"),
+                arguments("description is too long", aCreateCommand().description("x".repeat(2_001)).build(), "description must be at most 2000 characters"),
+                arguments("description hides a right-to-left override", aCreateCommand().description("Fine‮").build(), "description must not contain invisible characters"),
+                arguments("too many externalReferences", aCreateCommand().externalReferences(Collections.nCopies(21, "https://dev.java/learn/")).build(), "externalReferences must have at most 20 entries"),
+                arguments("an externalReference is too long", aCreateCommand().externalReferences(List.of("x".repeat(501))).build(), "externalReferences must each be at most 500 characters"),
+                arguments("an externalReference has a line break", aCreateCommand().externalReferences(List.of("https://dev.java/\nlearn")).build(), "externalReferences must each be one line without invisible characters"),
+                arguments("an externalReference is null", aCreateCommand().externalReferences(Arrays.asList("https://dev.java/learn/", null)).build(), "externalReferences must not contain empty entries"),
+                arguments("an externalReference is blank", aCreateCommand().externalReferences(List.of(" ")).build(), "externalReferences must not contain empty entries"));
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("missingFields")
+    @MethodSource("invalidFields")
     @DisplayName("""
-            Given a new concept missing a required field
+            Given a new concept that breaks one field rule
             When it is validated
-            Then a validation error names the field
+            Then a validation error names the field and the rule
             """)
-    void validateRejectsMissingRequiredField(String description, CreateConceptCommand command, String expectedMessage) {
+    void validateRejectsInvalidField(String description, CreateConceptCommand command, String expectedMessage) {
         // When
         ValidationException exception = assertThrows(ValidationException.class, () -> conceptService.validate(command));
 
@@ -160,9 +188,9 @@ class ConceptServiceTest {
         assertEquals("Concept tag 'ghost' does not exist", exception.getMessage());
     }
 
-    @ParameterizedTest(name = "{0} (admin: {1}) on a {2} concept -> allowed: {3}")
+    @ParameterizedTest(name = "{0} (staff: {1}) on a {2} concept -> allowed: {3}")
     @CsvSource(textBlock = """
-            # caller,    admin, status,  allowed
+            # caller,    staff, status,  allowed
             1001,        false, DRAFT,   true
             1001,        false, ACTIVE,  true
             1001,        false, RETIRED, true
@@ -176,24 +204,24 @@ class ConceptServiceTest {
     @DisplayName("""
             Given a concept owned by its author, in a given status
             When a caller wants to change it
-            Then only the owner or an admin is allowed, in any status
+            Then only the owner or staff may, in any status
             """)
-    void requireCanBeModifiedByAllowsOwnerOrAnyAdmin(Long caller, boolean admin, ConceptStatus status, boolean allowed) {
+    void requireCanBeModifiedByAllowsOwnerOrAnyStaff(Long caller, boolean staff, ConceptStatus status, boolean allowed) {
         // Given
         Concept concept = Concept.builder().tag("java-core").status(status).createdBy(1001L).build();
 
         // When / Then
         if (allowed) {
-            assertDoesNotThrow(() -> conceptService.requireCanBeModifiedBy(concept, caller, admin));
+            assertDoesNotThrow(() -> conceptService.requireCanBeModifiedBy(concept, caller, staff));
         } else {
             assertThrows(ConceptModificationForbiddenException.class,
-                    () -> conceptService.requireCanBeModifiedBy(concept, caller, admin));
+                    () -> conceptService.requireCanBeModifiedBy(concept, caller, staff));
         }
     }
 
-    @ParameterizedTest(name = "{0} (admin: {1}) on a {2} concept -> allowed: {3}")
+    @ParameterizedTest(name = "{0} (staff: {1}) on a {2} concept -> allowed: {3}")
     @CsvSource(textBlock = """
-            # caller,    admin, status,  allowed
+            # caller,    staff, status,  allowed
             1001,        false, DRAFT,   true
             1001,        false, ACTIVE,  false
             1001,        false, RETIRED, false
@@ -207,24 +235,24 @@ class ConceptServiceTest {
     @DisplayName("""
             Given a concept owned by its author, in a given status
             When a caller wants to delete it
-            Then only the owner of a DRAFT, or an admin in any status, is allowed
+            Then only the owner of a DRAFT, or staff in any status, may
             """)
-    void requireCanBeDeletedByAllowsOwnerOfDraftOrAnyAdmin(Long caller, boolean admin, ConceptStatus status, boolean allowed) {
+    void requireCanBeDeletedByAllowsOwnerOfDraftOrAnyStaff(Long caller, boolean staff, ConceptStatus status, boolean allowed) {
         // Given
         Concept concept = Concept.builder().tag("java-core").status(status).createdBy(1001L).build();
 
         // When / Then
         if (allowed) {
-            assertDoesNotThrow(() -> conceptService.requireCanBeDeletedBy(concept, caller, admin));
+            assertDoesNotThrow(() -> conceptService.requireCanBeDeletedBy(concept, caller, staff));
         } else {
             assertThrows(ForbiddenException.class,
-                    () -> conceptService.requireCanBeDeletedBy(concept, caller, admin));
+                    () -> conceptService.requireCanBeDeletedBy(concept, caller, staff));
         }
     }
 
-    @ParameterizedTest(name = "to {0} (admin: {1}) -> allowed: {2}")
+    @ParameterizedTest(name = "to {0} (staff: {1}) -> allowed: {2}")
     @CsvSource(textBlock = """
-            # target,  admin, allowed
+            # target,  staff, allowed
             ACTIVE,    false, true
             DRAFT,     false, false
             RETIRED,   false, false
@@ -233,19 +261,67 @@ class ConceptServiceTest {
             RETIRED,   true,  true
             """)
     @DisplayName("""
-            Given the owner or an admin changing a concept's status
+            Given the owner or staff changing a concept's status
             When the target status is checked
-            Then owners may only publish (ACTIVE); unpublishing and retiring are for admins
+            Then owners may only publish (ACTIVE); unpublishing and retiring are for staff
             """)
-    void requireCanChangeStatusToAllowsOwnersOnlyToPublish(ConceptStatus target, boolean admin, boolean allowed) {
+    void requireCanChangeStatusToAllowsOwnersOnlyToPublish(ConceptStatus target, boolean staff, boolean allowed) {
         // When / Then
         if (allowed) {
-            assertDoesNotThrow(() -> conceptService.requireCanChangeStatusTo(target, admin));
+            assertDoesNotThrow(() -> conceptService.requireCanChangeStatusTo(target, staff));
         } else {
-            AdminRequiredException exception = assertThrows(AdminRequiredException.class,
-                    () -> conceptService.requireCanChangeStatusTo(target, admin));
-            assertEquals("Only an admin may unpublish or retire a concept", exception.getMessage());
+            StaffRequiredException exception = assertThrows(StaffRequiredException.class,
+                    () -> conceptService.requireCanChangeStatusTo(target, staff));
+            assertEquals("Only staff may unpublish or retire a concept", exception.getMessage());
         }
+    }
+
+    @Test
+    @DisplayName("""
+            Given only staff publish concepts
+            When a concept's owner, who isn't staff, wants to publish it
+            Then it is refused: publishing is for staff
+            """)
+    void requireCanChangeStatusToRefusesOwnerPublishingWhenOnlyStaffPublish() {
+        // When
+        StaffRequiredException exception = assertThrows(StaffRequiredException.class,
+                () -> staffPublishOnly.requireCanChangeStatusTo(ConceptStatus.ACTIVE, false));
+
+        // Then
+        assertEquals("Only staff may publish a concept", exception.getMessage());
+    }
+
+    @Test
+    @DisplayName("""
+            Given only staff publish concepts
+            When staff publish a concept
+            Then it is allowed
+            """)
+    void requireCanChangeStatusToAllowsStaffPublishingWhenOnlyStaffPublish() {
+        // When / Then
+        assertDoesNotThrow(() -> staffPublishOnly.requireCanChangeStatusTo(ConceptStatus.ACTIVE, true));
+    }
+
+    @ParameterizedTest(name = "members publish: {0}, staff: {1} -> {2}")
+    @CsvSource(textBlock = """
+            # members publish, staff, starting status
+            true,              false, ACTIVE
+            true,              true,  ACTIVE
+            false,             false, DRAFT
+            false,             true,  ACTIVE
+            """)
+    @DisplayName("""
+            Given whether members may publish concepts, and whether the author is staff
+            When a new concept's starting status is decided
+            Then it is published straight away, unless only staff publish and the author isn't staff:
+            then it waits as a draft for staff to publish it
+            """)
+    void startingStatusFollowsWhoMayPublish(boolean membersPublish, boolean staff, ConceptStatus expected) {
+        // Given
+        ConceptService service = new ConceptService(conceptRepository, membersPublish, true);
+
+        // When / Then
+        assertEquals(expected, service.startingStatus(staff));
     }
 
     // ---------------------------------------------------------------------

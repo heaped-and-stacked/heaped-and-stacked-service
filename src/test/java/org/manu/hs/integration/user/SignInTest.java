@@ -2,6 +2,7 @@ package org.manu.hs.integration.user;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.manu.hs.application.user.UserApplication;
 import org.manu.hs.application.user.command.SignInCommand;
 import org.manu.hs.application.user.exception.UserNotActiveException;
@@ -11,9 +12,13 @@ import org.manu.hs.domain.user.UserIdentity;
 import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.domain.user.UserStatus;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -25,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * exact call the login flow makes after GitHub's callback (OAuth2SignInService).
  * The test profile makes GitHub account 999 a bootstrap admin.
  */
+@ExtendWith(OutputCaptureExtension.class)
 class SignInTest extends AbstractIntegrationTest {
 
     private static final String BOOTSTRAP_ADMIN_GITHUB_ID = "999";
@@ -175,6 +181,29 @@ class SignInTest extends AbstractIntegrationTest {
         assertNotEquals(1004L, user.getId());
         assertEquals(UserStatus.ACTIVE, user.getStatus());
         assertEquals(UserStatus.DELETED, findUser(1004L).getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a new GitHub account, and a blocked member
+            When both sign in
+            Then the audit log records the new member's sign-in and the blocked member's refusal,
+            by id only
+            """)
+    void signInIsAudited(CapturedOutput output) {
+        // Given
+        insertUser(1004L, UserRole.MEMBER, UserStatus.BLOCKED);
+        insertIdentity(1004L, AuthProvider.GITHUB, "5004", "blocked-coder");
+
+        // When
+        User user = userApplication.signIn(gitHubSignIn("5001", "new-coder", "New Coder", null));
+        assertThrows(UserNotActiveException.class,
+                () -> userApplication.signIn(gitHubSignIn("5004", "blocked-coder", null, null)));
+
+        // Then
+        assertTrue(output.getAll().contains("sign_in user=%d role=MEMBER".formatted(user.getId())));
+        assertTrue(output.getAll().contains("sign_in_refused user=1004 status=BLOCKED"));
+        assertFalse(output.getAll().contains("new-coder"), "no GitHub login in the audit log");
     }
 
     private static SignInCommand gitHubSignIn(String gitHubId, String login, String name, String avatarUrl) {

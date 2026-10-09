@@ -2,6 +2,7 @@ package org.manu.hs.api.user;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import org.manu.hs.api.user.dto.OverviewResponse;
 import org.manu.hs.api.user.dto.UpdateUserRoleRequest;
 import org.manu.hs.api.user.dto.UpdateUserStatusRequest;
 import org.manu.hs.api.user.dto.UserResponse;
@@ -11,6 +12,7 @@ import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.domain.user.UserStatus;
 import org.manu.hs.security.UserSessions;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -23,18 +25,25 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * User administration. SecurityConfig lets only admins reach /admin/**, and
- * UserApplication checks the role again.
+ * User administration, and the overview at the top of the admin page. SecurityConfig lets only
+ * admins reach /admin/**, and UserApplication checks the role again.
  */
 @RestController
 @RequiredArgsConstructor
-@RequestMapping("/admin/users")
+@RequestMapping("/admin")
 public class AdminUserController {
 
     private final UserApplication userApplication;
     private final UserSessions userSessions;
 
-    @GetMapping
+    /** The numbers at the top of the admin page. */
+    @GetMapping("/overview")
+    @ResponseStatus(HttpStatus.OK)
+    public OverviewResponse getOverview() {
+        return OverviewResponse.toDto(userApplication.getOverview());
+    }
+
+    @GetMapping("/users")
     @ResponseStatus(HttpStatus.OK)
     public List<UserResponse> getUsers(
             @RequestParam(required = false) UserRole role,
@@ -42,14 +51,14 @@ public class AdminUserController {
         return userApplication.listUsers(role, status).stream().map(UserResponse::toDto).toList();
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/users/{id}")
     @ResponseStatus(HttpStatus.OK)
     public UserResponse getUser(@PathVariable Long id) {
         return UserResponse.toDto(userApplication.getUserAsAdmin(id));
     }
 
     /** The user is signed out everywhere, so the new role applies from their next sign-in. */
-    @PutMapping("/{id}/role")
+    @PutMapping("/users/{id}/role")
     @ResponseStatus(HttpStatus.OK)
     public UserResponse updateUserRole(
             @PathVariable Long id,
@@ -61,7 +70,7 @@ public class AdminUserController {
     }
 
     /** The user is signed out everywhere, so blocking takes effect immediately. */
-    @PutMapping("/{id}/status")
+    @PutMapping("/users/{id}/status")
     @ResponseStatus(HttpStatus.OK)
     public UserResponse updateUserStatus(
             @PathVariable Long id,
@@ -70,5 +79,19 @@ public class AdminUserController {
         final User updated = userApplication.changeStatus(id, request.getStatus());
         userSessions.endAllSessionsOf(id, httpRequest);
         return UserResponse.toDto(updated);
+    }
+
+    /**
+     * Deletes someone's account (soft delete, as when they delete it themselves) and signs them
+     * out everywhere. eraseActivity=true also erases their sets, votes and feedback.
+     */
+    @DeleteMapping("/users/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteUser(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "false") boolean eraseActivity,
+            HttpServletRequest httpRequest) {
+        userApplication.deleteAccountAsAdmin(id, eraseActivity);
+        userSessions.endAllSessionsOf(id, httpRequest);
     }
 }

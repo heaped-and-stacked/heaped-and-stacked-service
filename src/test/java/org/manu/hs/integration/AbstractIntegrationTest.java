@@ -11,6 +11,8 @@ import org.manu.hs.domain.concept.ContributionPolicy;
 import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.question.ReportReason;
+import org.manu.hs.domain.question.Vote;
 import org.manu.hs.domain.user.AuthProvider;
 import org.manu.hs.domain.user.User;
 import org.manu.hs.domain.user.UserIdentity;
@@ -30,7 +32,6 @@ import org.springframework.security.oauth2.client.authentication.OAuth2Authentic
 import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.web.servlet.client.EntityExchangeResult;
 import org.springframework.test.web.servlet.client.RestTestClient;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -69,6 +70,8 @@ public abstract class AbstractIntegrationTest {
     protected static final Long AUTHOR = 1001L;      // a member
     protected static final Long OTHER_USER = 1002L;  // another member
     protected static final Long ADMIN = 1003L;       // an admin
+    /** Gym staff: not inserted by default (user lists count the three above); tests add them. */
+    protected static final Long STAFF = 1004L;
 
     private static final String SESSION_COOKIE = "SESSION";
     private static final String SECURITY_CONTEXT_ATTRIBUTE = "SPRING_SECURITY_CONTEXT";
@@ -104,10 +107,9 @@ public abstract class AbstractIntegrationTest {
         insertUser(OTHER_USER, UserRole.MEMBER);
         insertUser(ADMIN, UserRole.ADMIN);
 
-        final OpenSession session = openSession();
+        final OpenSession session = openSession(AUTHOR);
         restClient = session.client;
         sessionId = session.id;
-        actingAs(AUTHOR);
     }
 
     @AfterEach
@@ -149,15 +151,23 @@ public abstract class AbstractIntegrationTest {
         return clientSignedInAs(user.getId());
     }
 
+    /** A client with no session cookie at all, like an uptime monitor or a first visit. */
+    protected RestTestClient clientWithoutSession() {
+        return baseRestClient;
+    }
+
+    /** How many sign-in sessions the database holds. */
+    protected int countSessions() {
+        return jdbcTemplate.queryForObject("SELECT count(*) FROM spring_session", Integer.class);
+    }
+
     /**
      * A second, independent "browser": a new session signed in as the given user. Use it
      * when a test needs two people signed in at once, e.g. an admin blocking a member
      * who is signed in elsewhere.
      */
     protected RestTestClient clientSignedInAs(Long userId) {
-        final OpenSession session = openSession();
-        storeInSession(session.id, signedInContext(userId));
-        return session.client;
+        return openSession(userId).client;
     }
 
     /** What a GitHub sign-in stores: a SignedInUser with the role from the user's row. */
@@ -172,28 +182,38 @@ public abstract class AbstractIntegrationTest {
                 new OAuth2AuthenticationToken(principal, principal.getAuthorities(), "github"));
     }
 
-    /** Opens a session the way the UI does: by fetching a CSRF token. */
-    private OpenSession openSession() {
-        final EntityExchangeResult<Map<String, String>> result = baseRestClient
+    /**
+     * Opens a session signed in as the given user, as after a GitHub sign-in, then fetches its
+     * CSRF token the way the UI does (only signed-in sessions get one).
+     */
+    private OpenSession openSession(Long userId) {
+        final String id = createSession(sessionRepository, signedInContext(userId));
+        // Spring Session's cookie holds the session id, Base64-encoded.
+        final String cookieValue = Base64.getEncoder().encodeToString(id.getBytes(StandardCharsets.UTF_8));
+
+        final Map<String, String> csrf = baseRestClient
                 .get()
                 .uri("/csrf")
+                .cookie(SESSION_COOKIE, cookieValue)
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody(new ParameterizedTypeReference<Map<String, String>>() {
                 })
-                .returnResult();
-
-        // Spring Session's cookie holds the session id, Base64-encoded.
-        final String cookieValue = result.getResponseCookies().getFirst(SESSION_COOKIE).getValue();
-        final String id = new String(Base64.getDecoder().decode(cookieValue), StandardCharsets.UTF_8);
-
-        final Map<String, String> csrf = result.getResponseBody();
+                .returnResult()
+                .getResponseBody();
         final RestTestClient client = baseRestClient.mutate()
                 .defaultCookie(SESSION_COOKIE, cookieValue)
                 .defaultHeader(csrf.get("headerName"), csrf.get("token"))
                 .build();
 
         return new OpenSession(client, id);
+    }
+
+    private <S extends Session> String createSession(SessionRepository<S> repository, SecurityContext context) {
+        final S session = repository.createSession();
+        session.setAttribute(SECURITY_CONTEXT_ATTRIBUTE, context);
+        repository.save(session);
+        return session.getId();
     }
 
     private void storeInSession(String id, SecurityContext context) {
@@ -274,6 +294,30 @@ public abstract class AbstractIntegrationTest {
                         .build(),
                 provider.name(),
                 providerUserId);
+    }
+
+    /** The house account, as the content migration creates it: staff, no GitHub login. */
+    /** Moves the account's creation back in time, e.g. to make someone a member of long standing. */
+    protected void setUserCreatedAt(Long userId, Instant createdAt) {
+        jdbcTemplate.update("UPDATE app_user SET created_at = ? WHERE id = ?", Timestamp.from(createdAt), userId);
+    }
+
+    protected void insertHouseAccount(Long userId) {
+        jdbcTemplate.update(
+                "INSERT INTO app_user (id, display_name, user_role, user_status) VALUES (?, 'Heaped & Stacked', 'STAFF', 'ACTIVE')",
+                userId);
+    }
+
+    /** How many sets, votes and feedback the user has. */
+    protected int countActivityOf(Long userId) {
+        return jdbcTemplate.queryForObject(
+                """
+                        SELECT (SELECT COUNT(*) FROM answer WHERE user_id = ?)
+                             + (SELECT COUNT(*) FROM question_vote WHERE user_id = ?)
+                             + (SELECT COUNT(*) FROM question_report WHERE reported_by = ?)
+                        """,
+                Integer.class,
+                userId, userId, userId);
     }
 
     protected int countIdentitiesOf(Long userId) {
@@ -512,6 +556,10 @@ public abstract class AbstractIntegrationTest {
                 questionId);
     }
 
+    protected int countConcepts() {
+        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM concept", Integer.class);
+    }
+
     protected int countQuestions() {
         return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM question", Integer.class);
     }
@@ -525,11 +573,6 @@ public abstract class AbstractIntegrationTest {
         assertEquals(0, count);
     }
 
-    /**
-     * A valid question body linked to the given concepts. Use it when the payload is not
-     * what the test is about (permissions, not-found, ...); write the JSON out in full when
-     * the payload itself is under test.
-     */
     /** Answers the question as whoever {@link #restClient} is signed in as; returns the answer's id. */
     protected Long submitAnswer(Long questionId, String answer) {
         AnswerResponse created = restClient
@@ -560,6 +603,10 @@ public abstract class AbstractIntegrationTest {
     }
 
     /** Edits a question's text directly, as its author would. */
+    protected void setQuestionTitle(Long questionId, String title) {
+        jdbcTemplate.update("UPDATE question SET title = ? WHERE id = ?", title, questionId);
+    }
+
     protected void setQuestionRequirement(Long questionId, String requirement) {
         jdbcTemplate.update("UPDATE question SET requirement = ? WHERE id = ?", requirement, questionId);
     }
@@ -575,6 +622,75 @@ public abstract class AbstractIntegrationTest {
                 answerId);
     }
 
+    // ---------------------------------------------------------------------
+    // Feedback: reports and votes
+    // ---------------------------------------------------------------------
+
+    /** An OPEN report on the question, as if the given learner had sent it; returns its id. */
+    protected Long insertReport(Long questionId, Long reportedBy) {
+        return insertReport(questionId, reportedBy, ReportReason.WRONG);
+    }
+
+    /** An OPEN report with the given reason (e.g. PRAISE); returns its id. */
+    protected Long insertReport(Long questionId, Long reportedBy, ReportReason reason) {
+        return jdbcTemplate.queryForObject(
+                "INSERT INTO question_report (question_id, reported_by, reason, note) VALUES (?, ?, ?, 'The model answer is wrong') RETURNING id",
+                Long.class,
+                questionId, reportedBy, reason.name());
+    }
+
+    /** Decides the report directly, as whoever is given: RESOLVED or DISMISSED. */
+    protected void setReportStatus(Long reportId, String status, Long resolvedBy) {
+        jdbcTemplate.update(
+                "UPDATE question_report SET report_status = ?, resolved_by = ?, resolved_at = now() WHERE id = ?",
+                status, resolvedBy, reportId);
+    }
+
+    /** Decides the report directly, at the given time (to test the order of decided reports). */
+    protected void setReportStatus(Long reportId, String status, Long resolvedBy, Instant resolvedAt) {
+        jdbcTemplate.update(
+                "UPDATE question_report SET report_status = ?, resolved_by = ?, resolved_at = ? WHERE id = ?",
+                status, resolvedBy, Timestamp.from(resolvedAt), reportId);
+    }
+
+    protected Map<String, Object> findReportRow(Long reportId) {
+        return jdbcTemplate.queryForMap(
+                """
+                        SELECT question_id, reported_by, reason, note, report_status, resolved_by, resolved_at
+                        FROM question_report
+                        WHERE id = ?
+                        """,
+                reportId);
+    }
+
+    protected List<Map<String, Object>> findReportRows(Long questionId) {
+        return jdbcTemplate.queryForList(
+                "SELECT reported_by, reason, note, report_status FROM question_report WHERE question_id = ? ORDER BY id",
+                questionId);
+    }
+
+    protected void insertVote(Long questionId, Long userId, Vote vote) {
+        jdbcTemplate.update(
+                "INSERT INTO question_vote (question_id, user_id, vote) VALUES (?, ?, ?)",
+                questionId, userId, vote.name());
+    }
+
+    /** The learner's vote on the question, or null if they have none. */
+    protected String findVote(Long questionId, Long userId) {
+        return jdbcTemplate.queryForList(
+                        "SELECT vote FROM question_vote WHERE question_id = ? AND user_id = ?",
+                        String.class,
+                        questionId, userId)
+                .stream()
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * A valid question body linked to the given concepts. Use it when the payload is not
+     * what the test is about (permissions, not-found, ...); write the JSON out in full when
+     * the payload itself is under test.
+     */
     protected static String validQuestionJson(String... conceptTags) {
         String tags = Arrays.stream(conceptTags)
                 .map(tag -> "\"" + tag + "\"")

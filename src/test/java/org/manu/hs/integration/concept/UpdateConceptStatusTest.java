@@ -2,23 +2,29 @@ package org.manu.hs.integration.concept;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.manu.hs.api.content.dto.ConceptResponse;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * PUT /content/concepts/{tag}/status
  */
+@ExtendWith(OutputCaptureExtension.class)
 class UpdateConceptStatusTest extends AbstractIntegrationTest {
 
     @ParameterizedTest(name = "{0} -> {1}")
@@ -176,7 +182,7 @@ class UpdateConceptStatusTest extends AbstractIntegrationTest {
                 .expectStatus().isForbidden()
                 .expectBody()
                 .jsonPath("$.message")
-                .isEqualTo("Only an admin may unpublish or retire a concept");
+                .isEqualTo("Only staff may unpublish or retire a concept");
 
         assertEquals(from, findConceptByTag("java-core").getStatus());
     }
@@ -270,6 +276,45 @@ class UpdateConceptStatusTest extends AbstractIntegrationTest {
                 .expectStatus().isBadRequest()
                 .expectBody()
                 .jsonPath("$.message").isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("""
+            Given an active concept owned by a member
+            When gym staff retire it
+            Then the status is changed with HTTP 200, as staff curate every concept
+            """)
+    void updateConceptStatusReturnsOkWhenStaffRetiresConcept() {
+        // Given
+        insertConcept("java-core", ConceptStatus.ACTIVE);
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = updateStatus("java-core", "RETIRED");
+
+        // Then
+        response.expectStatus().isOk();
+
+        assertEquals(ConceptStatus.RETIRED, findConceptByTag("java-core").getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given an active concept
+            When an admin retires it
+            Then the audit log records who changed which concept's status, and to what
+            """)
+    void conceptStatusChangeIsAudited(CapturedOutput output) {
+        // Given
+        insertConcept("java-core", ConceptStatus.ACTIVE);
+        actingAs(ADMIN);
+
+        // When
+        updateStatus("java-core", "RETIRED").expectStatus().isOk();
+
+        // Then
+        assertTrue(output.getAll().contains("concept_status_changed by=1003 concept=java-core status=RETIRED"));
     }
 
     private RestTestClient.ResponseSpec updateStatus(String tag, String status) {

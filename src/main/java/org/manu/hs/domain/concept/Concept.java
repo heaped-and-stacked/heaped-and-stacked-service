@@ -25,4 +25,13 @@ public class Concept {
     private Instant createdAt;
     private Instant updatedAt;
 
+    /**
+     * Who curates this concept: edits it, decides which questions it accepts, and decides reports
+     * on them. Its owner, or staff (admins included). The one place this rule lives: co-owners,
+     * if they ever come, are added here.
+     */
+    public boolean isCuratedBy(Long userId, boolean staff) {
+        return staff || createdBy.equals(userId);
+    }
+
 }

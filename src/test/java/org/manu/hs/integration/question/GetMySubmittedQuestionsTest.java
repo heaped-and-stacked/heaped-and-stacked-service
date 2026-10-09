@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.manu.hs.api.content.dto.QuestionResponse;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.question.Vote;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.test.web.servlet.client.RestTestClient;
@@ -101,6 +102,35 @@ class GetMySubmittedQuestionsTest extends AbstractIntegrationTest {
 
         assertNotNull(questions);
         assertTrue(questions.isEmpty());
+    }
+
+    @Test
+    @DisplayName("""
+            Given two of the caller's questions, one voted up by two learners and down by one, the other never voted on
+            When a GET request is sent to the questions mine endpoint
+            Then each question says how many learners voted it up and down
+            """)
+    void getMySubmittedQuestionsReturnsVoteTotals() {
+        // Given
+        insertConcept("java-core");
+        Long voted = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        Long notVoted = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        insertVote(voted, OTHER_USER, Vote.UP);
+        insertVote(voted, ADMIN, Vote.UP);
+        insertVote(voted, AUTHOR, Vote.DOWN);
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = getMine();
+
+        // Then
+        response
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[?(@.id == %d)].upVotes".formatted(voted)).isEqualTo(List.of(2))
+                .jsonPath("$[?(@.id == %d)].downVotes".formatted(voted)).isEqualTo(List.of(1))
+                .jsonPath("$[?(@.id == %d)].upVotes".formatted(notVoted)).isEqualTo(List.of(0))
+                .jsonPath("$[?(@.id == %d)].downVotes".formatted(notVoted)).isEqualTo(List.of(0));
     }
 
     private RestTestClient.ResponseSpec getMine() {

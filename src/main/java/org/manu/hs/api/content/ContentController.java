@@ -4,7 +4,10 @@ import lombok.RequiredArgsConstructor;
 import org.manu.hs.api.content.dto.ConceptResponse;
 import org.manu.hs.api.content.dto.CreateConceptRequest;
 import org.manu.hs.api.content.dto.CreateQuestionRequest;
+import org.manu.hs.api.content.dto.QuestionPageResponse;
 import org.manu.hs.api.content.dto.QuestionResponse;
+import org.manu.hs.api.content.dto.ReportResponse;
+import org.manu.hs.api.content.dto.ResolveReportRequest;
 import org.manu.hs.api.content.dto.ReviewDecisionRequest;
 import org.manu.hs.api.content.dto.ReviewResponse;
 import org.manu.hs.api.content.dto.UpdateConceptRequest;
@@ -18,6 +21,7 @@ import org.manu.hs.application.content.command.UpdateConceptCommand;
 import org.manu.hs.application.content.command.UpdateQuestionCommand;
 import org.manu.hs.domain.concept.Concept;
 import org.manu.hs.domain.question.Question;
+import org.manu.hs.domain.question.VoteTotals;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -26,10 +30,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequiredArgsConstructor
@@ -69,6 +75,7 @@ public class ContentController {
         return ConceptResponse.toDto(updated);
     }
 
+    /** Open to visitors. Drafts are left out unless the caller curates them (their owner, or staff). */
     @GetMapping("/concepts")
     @ResponseStatus(HttpStatus.OK)
     public List<ConceptResponse> getConcepts() {
@@ -106,10 +113,45 @@ public class ContentController {
         applicationFacade.deleteQuestion(id);
     }
 
+    @GetMapping("/questions")
+    @ResponseStatus(HttpStatus.OK)
+    public QuestionPageResponse getQuestions(
+            @RequestParam(required = false) String muscle,
+            @RequestParam(required = false) String search,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        final List<Question> questions = applicationFacade.getCuratedQuestions(muscle, search, page, size);
+        final long totalItems = applicationFacade.countCuratedQuestions(muscle, search);
+        final Map<Long, VoteTotals> votes = applicationFacade.getVoteTotals(
+                questions.stream().map(Question::getId).toList());
+        return QuestionPageResponse.builder()
+                .items(questions.stream()
+                        .map(question -> QuestionResponse.toDto(question, votes.getOrDefault(question.getId(), VoteTotals.NONE)))
+                        .toList())
+                .page(page)
+                .size(size)
+                .totalItems(totalItems)
+                .totalPages((int) ((totalItems + size - 1) / size))
+                .build();
+    }
+
+    @GetMapping("/questions/{id}")
+    @ResponseStatus(HttpStatus.OK)
+    public QuestionResponse getQuestion(@PathVariable Long id) {
+        final Question question = applicationFacade.getQuestion(id);
+        final VoteTotals votes = applicationFacade.getVoteTotals(List.of(id)).getOrDefault(id, VoteTotals.NONE);
+        return QuestionResponse.toDto(question, votes);
+    }
+
     @GetMapping("/questions/mine")
     @ResponseStatus(HttpStatus.OK)
     public List<QuestionResponse> getMySubmittedQuestions() {
-        return applicationFacade.getMySubmittedQuestions().stream().map(QuestionResponse::toDto).toList();
+        final List<Question> questions = applicationFacade.getMySubmittedQuestions();
+        final Map<Long, VoteTotals> votes = applicationFacade.getVoteTotals(
+                questions.stream().map(Question::getId).toList());
+        return questions.stream()
+                .map(question -> QuestionResponse.toDto(question, votes.getOrDefault(question.getId(), VoteTotals.NONE)))
+                .toList();
     }
 
     // ---------------------------------------------------------------------
@@ -129,6 +171,36 @@ public class ContentController {
             @PathVariable String tag,
             @RequestBody ReviewDecisionRequest request) {
         applicationFacade.reviewQuestion(id, tag, request.getStatus());
+    }
+
+    // ---------------------------------------------------------------------
+    // Reports
+    // ---------------------------------------------------------------------
+
+    /**
+     * Open reports the caller can decide, oldest first; with decided=true, the latest decided ones
+     * (resolved or dismissed), newest decision first.
+     */
+    @GetMapping("/reports")
+    @ResponseStatus(HttpStatus.OK)
+    public List<ReportResponse> getReports(@RequestParam(defaultValue = "false") boolean decided) {
+        return applicationFacade.getReports(decided).stream().map(ReportResponse::toDto).toList();
+    }
+
+    /**
+     * Every report on one question, for whoever may change it (its author, or staff): open ones
+     * first, oldest first; then decided ones, newest decision first.
+     */
+    @GetMapping("/questions/{id}/reports")
+    @ResponseStatus(HttpStatus.OK)
+    public List<ReportResponse> getQuestionReports(@PathVariable Long id) {
+        return applicationFacade.getQuestionReports(id).stream().map(ReportResponse::toDto).toList();
+    }
+
+    @PutMapping("/reports/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void resolveReport(@PathVariable Long id, @RequestBody ResolveReportRequest request) {
+        applicationFacade.resolveReport(id, request.getStatus());
     }
 
     // ---------------------------------------------------------------------

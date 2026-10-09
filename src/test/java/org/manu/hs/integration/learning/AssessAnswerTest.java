@@ -2,6 +2,8 @@ package org.manu.hs.integration.learning;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.manu.hs.domain.question.QuestionStatus;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.http.MediaType;
@@ -49,13 +51,20 @@ class AssessAnswerTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
-            Given a learner's own answer
-            When they only grade their answer
-            Then the grade is stored and the difficulty stays empty, as both parts are optional
+            Given a learner's own answer, already graded and rated for difficulty
+            When they send only a new grade
+            Then the assessment is replaced as a whole: the new grade is stored and the difficulty
+            left out is cleared, which is how the app takes a value back (both parts are optional)
             """)
-    void assessAnswerStoresOnlyWhatIsGiven() {
+    void assessAnswerReplacesTheWholeAssessment() {
         // Given
         Long answerId = answerAsOtherUser();
+        assess(answerId, """
+                {
+                    "selfGrade": 8,
+                    "perceivedDifficulty": 6
+                }
+                """).expectStatus().isOk();
 
         // When
         RestTestClient.ResponseSpec response = assess(answerId, """
@@ -144,6 +153,31 @@ class AssessAnswerTest extends AbstractIntegrationTest {
                 .expectBody()
                 .jsonPath("$.message")
                 .isEqualTo("selfGrade must be between 1 and 10");
+
+        assertNull(findAnswerRow(answerId).get("self_grade"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"5.9", "\"7\""})
+    @DisplayName("""
+            Given a learner's own answer
+            When they send a grade that isn't a whole JSON number (a decimal, or a number in quotes)
+            Then a bad request is returned and nothing is stored, rather than the value being quietly
+            cut down or converted
+            """)
+    void assessAnswerReturnsBadRequestWhenGradeIsNotAWholeNumber(String grade) {
+        // Given
+        Long answerId = answerAsOtherUser();
+
+        // When
+        RestTestClient.ResponseSpec response = assess(answerId, """
+                {
+                    "selfGrade": %s
+                }
+                """.formatted(grade));
+
+        // Then
+        response.expectStatus().isBadRequest();
 
         assertNull(findAnswerRow(answerId).get("self_grade"));
     }

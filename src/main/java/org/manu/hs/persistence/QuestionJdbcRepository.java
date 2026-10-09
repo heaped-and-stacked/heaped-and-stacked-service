@@ -6,6 +6,11 @@ import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionRepository;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.question.Report;
+import org.manu.hs.domain.question.ReportReason;
+import org.manu.hs.domain.question.ReportStatus;
+import org.manu.hs.domain.question.Vote;
+import org.manu.hs.domain.question.VoteTotals;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
@@ -15,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.sql.Array;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -26,7 +32,8 @@ import java.util.stream.Collectors;
 public class QuestionJdbcRepository implements QuestionRepository {
 
     // Aggregates each question's concept tags into a single array column in the same
-    // round trip, instead of one extra query per question (N+1).
+    // round trip, instead of one extra query per question (N+1). A concept whose owner declined
+    // the question isn't one of its tags any more (the DECLINED link stays, as the decision).
     private static final String SELECT_WITH_CONCEPT_TAGS = """
             SELECT q.id, q.title, q.requirement, q.sample_solution, q.difficulty_score,
                    q.question_status, q.source,
@@ -37,7 +44,7 @@ public class QuestionJdbcRepository implements QuestionRepository {
                        ARRAY[]::text[]
                    ) AS concept_tags
             FROM question q
-            LEFT JOIN question_concept qc ON qc.question_id = q.id
+            LEFT JOIN question_concept qc ON qc.question_id = q.id AND qc.link_status <> 'DECLINED'
             """;
 
     private static final String GROUP_BY_QUESTION = """
@@ -71,8 +78,12 @@ public class QuestionJdbcRepository implements QuestionRepository {
     private static final String FIND_LINKS_AWAITING_REVIEW_BY_CONCEPT_OWNER =
             SELECT_LINKS_AWAITING_REVIEW + " AND c.created_by = :owner_id" + ORDER_LINKS_OLDEST_FIRST;
 
+    /** Open reports (one per learner at most) at which a question is held back from learners. */
+    private static final int OPEN_REPORTS_TO_HOLD_BACK = 3;
+
     // Only the links a learner may see: accepted, on a published concept. Inner joins drop
-    // questions that have none.
+    // questions that have none. Questions with too many open problem reports are held back until
+    // their author, a concept owner or an admin resolves or dismisses them; praise never counts.
     private static final String SELECT_AVAILABLE_FOR_LEARNING = """
             SELECT q.id, q.title, q.requirement, q.sample_solution, q.difficulty_score,
                    q.question_status, q.source,
@@ -82,7 +93,12 @@ public class QuestionJdbcRepository implements QuestionRepository {
             JOIN question_concept qc ON qc.question_id = q.id AND qc.link_status = 'ACCEPTED'
             JOIN concept c ON c.tag = qc.concept_tag AND c.concept_status = 'ACTIVE'
             WHERE q.question_status = 'SUBMITTED'
-            """;
+              AND (SELECT count(*)
+                   FROM question_report r
+                   WHERE r.question_id = q.id
+                     AND r.report_status = 'OPEN'
+                     AND r.reason <> 'PRAISE') < %d
+            """.formatted(OPEN_REPORTS_TO_HOLD_BACK);
 
     private static final String FIND_AVAILABLE_FOR_LEARNING_BY_ID =
             SELECT_AVAILABLE_FOR_LEARNING + " AND q.id = :id " + GROUP_BY_QUESTION;
@@ -94,11 +110,22 @@ public class QuestionJdbcRepository implements QuestionRepository {
              WHERE a.user_id = :user_id
                AND a.question_id = q.id)""";
 
+    // How many learners like the question: an up vote or praise, each learner counted once.
+    private static final String LIKES = """
+            (SELECT count(*)
+             FROM (SELECT v.user_id FROM question_vote v WHERE v.question_id = q.id AND v.vote = 'UP'
+                   UNION
+                   SELECT r.reported_by FROM question_report r WHERE r.question_id = q.id AND r.reason = 'PRAISE') likers)""";
+
     // One available question for a learner, leaving out the skipped ones. With concept tags, it
-    // must be accepted for at least one of them. Never answered by this learner first, in random
-    // order. Then the answered ones, at random but weighted by age: weight = days since last
-    // answered + 1, so one done 30 days ago is 31 times as likely to come first as one done today,
-    // yet never certain. (Weighted random sampling: order by -ln(u) / weight, u uniform in (0, 1].)
+    // must be accepted for at least one of them. Never answered by this learner first, then the
+    // answered ones, each group at random but weighted:
+    //   - by age: days since last answered + 1 (1 for a new one), so one done 30 days ago is
+    //     31 times as likely to come first as one done today
+    //   - by likes: 1 + ln(1 + likes), a nudge that flattens out: 1 like 1.7, 5 likes 2.8,
+    //     20 likes 4.0
+    // The weights multiply, and nothing is ever certain. (Weighted random sampling: order by
+    // -ln(u) / weight, u uniform in (0, 1].)
     // IN (...) can't be empty: callers pass placeholder lists and :any_concept instead.
     private static final String FIND_NEXT_FOR_LEARNING =
             SELECT_AVAILABLE_FOR_LEARNING
@@ -106,8 +133,8 @@ public class QuestionJdbcRepository implements QuestionRepository {
                     + GROUP_BY_QUESTION
                     + " HAVING :any_concept OR bool_or(qc.concept_tag IN (:concept_tags))"
                     + " ORDER BY " + LAST_ANSWERED_AT + " IS NOT NULL,"
-                    + " -ln(1 - random()) / (extract(epoch FROM now() - coalesce(" + LAST_ANSWERED_AT
-                    + ", now())) / 86400 + 1)"
+                    + " -ln(1 - random()) / ((extract(epoch FROM now() - coalesce(" + LAST_ANSWERED_AT
+                    + ", now())) / 86400 + 1) * (1 + ln(1 + " + LIKES + ")))"
                     + " LIMIT 1";
 
     // The same available questions and concept filter as FIND_NEXT_FOR_LEARNING, never answered by
@@ -135,6 +162,24 @@ public class QuestionJdbcRepository implements QuestionRepository {
     // Newest first: backs "my questions", where the latest submission matters most.
     private static final String FIND_BY_SUBMITTED_BY =
             SELECT_WITH_CONCEPT_TAGS + " WHERE q.created_by = :created_by " + GROUP_BY_QUESTION + " ORDER BY q.id DESC";
+
+    // What Coach's Corner can filter by. Each filter has an "any" flag rather than a NULL check,
+    // so PostgreSQL never has to guess the type of a NULL parameter. A muscle matches any of the
+    // question's concepts, not only its main one.
+    private static final String CURATED_FILTER = """
+             WHERE (:any_author OR q.created_by = :created_by)
+               AND (:any_concept OR EXISTS (
+                       SELECT 1 FROM question_concept f
+                       WHERE f.question_id = q.id AND f.concept_tag = :concept_tag))
+               AND (:any_title OR q.title ILIKE :title_pattern ESCAPE '\\')
+            """;
+
+    // Newest first, like "my questions".
+    private static final String FIND_CURATED =
+            SELECT_WITH_CONCEPT_TAGS + CURATED_FILTER + GROUP_BY_QUESTION
+                    + " ORDER BY q.id DESC LIMIT :limit OFFSET :offset";
+
+    private static final String COUNT_CURATED = "SELECT COUNT(*) FROM question q " + CURATED_FILTER;
 
     private static final String INSERT = """
             INSERT INTO question (
@@ -178,10 +223,124 @@ public class QuestionJdbcRepository implements QuestionRepository {
             ON CONFLICT (question_id, concept_tag) DO NOTHING
             """;
 
+    // Declined links are never removed: re-adding the concept then hits the kept row (ON CONFLICT
+    // DO NOTHING above), so an author can't undo an owner's decline by removing and re-adding it.
     private static final String DELETE_REMOVED_CONCEPT_LINKS = """
             DELETE FROM question_concept
             WHERE question_id = :question_id
               AND concept_tag NOT IN (:concept_tags)
+              AND link_status <> 'DECLINED'
+            """;
+
+    private static final String INSERT_REPORT = """
+            INSERT INTO question_report (question_id, reported_by, reason, note)
+            VALUES (:question_id, :reported_by, :reason, :note)
+            RETURNING id
+            """;
+
+    private static final String SELECT_REPORTS = """
+            SELECT r.id, r.question_id, r.reported_by, r.reason, r.note, r.report_status,
+                   r.resolved_by, r.resolved_at, r.reported_at
+            FROM question_report r
+            """;
+
+    private static final String FIND_REPORT_BY_ID = SELECT_REPORTS + " WHERE r.id = :id";
+
+    // Oldest first, like reviews: whoever waited longest is looked at first.
+    private static final String ORDER_REPORTS_OLDEST_FIRST = " ORDER BY r.reported_at, r.id";
+
+    // Decided ones show the latest decision first, and only the latest few: a history, not a queue.
+    private static final String ORDER_REPORTS_NEWEST_DECISION_FIRST =
+            " ORDER BY r.resolved_at DESC, r.id DESC LIMIT :limit";
+
+    // Reports a user may see and decide: on questions they wrote, or that are linked to a concept
+    // they own, accepted or not.
+    private static final String REPORTS_VISIBLE_TO = """
+             JOIN question q ON q.id = r.question_id
+            WHERE (q.created_by = :user_id
+                   OR EXISTS (SELECT 1
+                              FROM question_concept qc
+                              JOIN concept c ON c.tag = qc.concept_tag
+                              WHERE qc.question_id = q.id
+                                AND c.created_by = :user_id))
+            """;
+
+    private static final String FIND_OPEN_REPORTS =
+            SELECT_REPORTS + " WHERE r.report_status = 'OPEN'" + ORDER_REPORTS_OLDEST_FIRST;
+
+    private static final String FIND_OPEN_REPORTS_VISIBLE_TO =
+            SELECT_REPORTS + REPORTS_VISIBLE_TO + " AND r.report_status = 'OPEN'" + ORDER_REPORTS_OLDEST_FIRST;
+
+    private static final String FIND_DECIDED_REPORTS =
+            SELECT_REPORTS + " WHERE r.report_status <> 'OPEN'" + ORDER_REPORTS_NEWEST_DECISION_FIRST;
+
+    private static final String FIND_DECIDED_REPORTS_VISIBLE_TO =
+            SELECT_REPORTS + REPORTS_VISIBLE_TO + " AND r.report_status <> 'OPEN'" + ORDER_REPORTS_NEWEST_DECISION_FIRST;
+
+    // Open reports have no resolved_at (chk_question_report_open_undecided), so they come first.
+    private static final String FIND_REPORTS_BY_QUESTION = SELECT_REPORTS + """
+             WHERE r.question_id = :question_id
+            ORDER BY r.resolved_at DESC NULLS FIRST, r.reported_at, r.id
+            """;
+
+    private static final String HAS_OPEN_REPORT = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM question_report
+                WHERE question_id = :question_id
+                  AND reported_by = :reported_by
+                  AND report_status = 'OPEN'
+            )
+            """;
+
+    private static final String FIND_OPEN_REPORT = SELECT_REPORTS + """
+             WHERE r.question_id = :question_id
+              AND r.reported_by = :reported_by
+              AND r.report_status = 'OPEN'
+            """;
+
+    private static final String UPDATE_OPEN_REPORT_CONTENT = """
+            UPDATE question_report
+            SET reason = :reason,
+                note = :note
+            WHERE id = :id
+              AND report_status = 'OPEN'
+            """;
+
+    private static final String DELETE_OPEN_REPORT = "DELETE FROM question_report WHERE id = :id AND report_status = 'OPEN'";
+
+    private static final String DECIDE_OPEN_REPORT = """
+            UPDATE question_report
+            SET report_status = :status,
+                resolved_by = :resolved_by,
+                resolved_at = now()
+            WHERE id = :id
+              AND report_status = 'OPEN'
+            """;
+
+    // One vote per learner and question: voting again replaces it.
+    private static final String SAVE_VOTE = """
+            INSERT INTO question_vote (question_id, user_id, vote)
+            VALUES (:question_id, :user_id, :vote)
+            ON CONFLICT (question_id, user_id)
+            DO UPDATE SET vote = EXCLUDED.vote, voted_at = now()
+            """;
+
+    private static final String FIND_VOTE = "SELECT vote FROM question_vote WHERE question_id = :question_id AND user_id = :user_id";
+
+    private static final String DELETE_VOTE = """
+            DELETE FROM question_vote
+            WHERE question_id = :question_id
+              AND user_id = :user_id
+            """;
+
+    private static final String COUNT_VOTES = """
+            SELECT question_id,
+                   count(*) FILTER (WHERE vote = 'UP') AS up,
+                   count(*) FILTER (WHERE vote = 'DOWN') AS down
+            FROM question_vote
+            WHERE question_id IN (:ids)
+            GROUP BY question_id
             """;
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
@@ -279,6 +438,36 @@ public class QuestionJdbcRepository implements QuestionRepository {
     }
 
     @Override
+    public List<Question> findCurated(Long createdBy, String conceptTag, String titleSearch, int limit, long offset) {
+        final MapSqlParameterSource params = curatedFilter(createdBy, conceptTag, titleSearch)
+                .addValue("limit", limit)
+                .addValue("offset", offset);
+        return jdbcTemplate.query(FIND_CURATED, params, this::mapQuestion);
+    }
+
+    @Override
+    public long countCurated(Long createdBy, String conceptTag, String titleSearch) {
+        Long count = jdbcTemplate.queryForObject(
+                COUNT_CURATED, curatedFilter(createdBy, conceptTag, titleSearch), Long.class);
+        return count == null ? 0 : count;
+    }
+
+    private static MapSqlParameterSource curatedFilter(Long createdBy, String conceptTag, String titleSearch) {
+        return new MapSqlParameterSource()
+                .addValue("any_author", createdBy == null)
+                .addValue("created_by", createdBy == null ? 0L : createdBy)
+                .addValue("any_concept", conceptTag == null)
+                .addValue("concept_tag", conceptTag == null ? "" : conceptTag)
+                .addValue("any_title", titleSearch == null)
+                .addValue("title_pattern", titleSearch == null ? "" : "%" + escapeLike(titleSearch) + "%");
+    }
+
+    /** Makes \, % and _ match themselves in an ILIKE pattern with ESCAPE '\'. */
+    private static String escapeLike(String text) {
+        return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
+
+    @Override
     public List<ConceptLink> findLinksAwaitingReview() {
         return linksAwaitingReview(FIND_LINKS_AWAITING_REVIEW, Map.of());
     }
@@ -330,6 +519,178 @@ public class QuestionJdbcRepository implements QuestionRepository {
                         .addValue("concept_tag", conceptTag)
                         .addValue("link_status", status.name())
                         .addValue("decided_by", decidedBy));
+    }
+
+    @Override
+    public Report insertReport(Report report) {
+        Long id = jdbcTemplate.queryForObject(
+                INSERT_REPORT,
+                new MapSqlParameterSource()
+                        .addValue("question_id", report.getQuestion().getId())
+                        .addValue("reported_by", report.getReportedBy())
+                        .addValue("reason", report.getReason().name())
+                        .addValue("note", report.getNote()),
+                Long.class);
+
+        return findReportById(id)
+                .orElseThrow(() ->
+                        new IllegalStateException(
+                                "Report was inserted but could not be retrieved"));
+    }
+
+    @Override
+    public Optional<Report> findReportById(Long id) {
+        return reports(FIND_REPORT_BY_ID, Map.of("id", id)).stream().findFirst();
+    }
+
+    @Override
+    public boolean hasOpenReport(Long questionId, Long reportedBy) {
+        Boolean open = jdbcTemplate.queryForObject(
+                HAS_OPEN_REPORT,
+                Map.of("question_id", questionId, "reported_by", reportedBy),
+                Boolean.class);
+
+        return Boolean.TRUE.equals(open);
+    }
+
+    @Override
+    public Optional<Report> findOpenReport(Long questionId, Long reportedBy) {
+        return reports(FIND_OPEN_REPORT, Map.of("question_id", questionId, "reported_by", reportedBy))
+                .stream()
+                .findFirst();
+    }
+
+    @Override
+    public Optional<Report> updateOpenReportContent(Long id, ReportReason reason, String note) {
+        final int updated = jdbcTemplate.update(
+                UPDATE_OPEN_REPORT_CONTENT,
+                new MapSqlParameterSource()
+                        .addValue("id", id)
+                        .addValue("reason", reason.name())
+                        .addValue("note", note));
+
+        return updated == 0 ? Optional.empty() : findReportById(id);
+    }
+
+    @Override
+    public boolean deleteOpenReport(Long id) {
+        return jdbcTemplate.update(DELETE_OPEN_REPORT, Map.of("id", id)) > 0;
+    }
+
+    @Override
+    public List<Report> findOpenReports() {
+        return reports(FIND_OPEN_REPORTS, Map.of());
+    }
+
+    @Override
+    public List<Report> findOpenReportsVisibleTo(Long userId) {
+        return reports(FIND_OPEN_REPORTS_VISIBLE_TO, Map.of("user_id", userId));
+    }
+
+    @Override
+    public List<Report> findDecidedReports(int limit) {
+        return reports(FIND_DECIDED_REPORTS, Map.of("limit", limit));
+    }
+
+    @Override
+    public List<Report> findDecidedReportsVisibleTo(Long userId, int limit) {
+        return reports(FIND_DECIDED_REPORTS_VISIBLE_TO, Map.of("user_id", userId, "limit", limit));
+    }
+
+    @Override
+    public List<Report> findReportsByQuestion(Long questionId) {
+        return reports(FIND_REPORTS_BY_QUESTION, Map.of("question_id", questionId));
+    }
+
+    @Override
+    public Optional<Report> decideOpenReport(Long id, ReportStatus status, Long resolvedBy) {
+        final int updated = jdbcTemplate.update(
+                DECIDE_OPEN_REPORT,
+                new MapSqlParameterSource()
+                        .addValue("id", id)
+                        .addValue("status", status.name())
+                        .addValue("resolved_by", resolvedBy));
+
+        return updated == 0 ? Optional.empty() : findReportById(id);
+    }
+
+    @Override
+    public void saveVote(Long questionId, Long userId, Vote vote) {
+        jdbcTemplate.update(
+                SAVE_VOTE,
+                Map.of("question_id", questionId, "user_id", userId, "vote", vote.name()));
+    }
+
+    @Override
+    public Optional<Vote> findVote(Long questionId, Long userId) {
+        return jdbcTemplate.queryForList(FIND_VOTE, Map.of("question_id", questionId, "user_id", userId), String.class)
+                .stream()
+                .findFirst()
+                .map(Vote::valueOf);
+    }
+
+    @Override
+    public void deleteVote(Long questionId, Long userId) {
+        jdbcTemplate.update(
+                DELETE_VOTE,
+                Map.of("question_id", questionId, "user_id", userId));
+    }
+
+    @Override
+    public Map<Long, VoteTotals> countVotes(List<Long> questionIds) {
+        if (questionIds.isEmpty()) {
+            return Map.of();
+        }
+
+        return jdbcTemplate.query(
+                        COUNT_VOTES,
+                        Map.of("ids", questionIds),
+                        (resultSet, rowNumber) -> Map.entry(
+                                resultSet.getLong("question_id"),
+                                new VoteTotals(resultSet.getInt("up"), resultSet.getInt("down"))))
+                .stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /**
+     * Two round trips instead of one per report, as for links: the reports, then their
+     * questions in a single query.
+     */
+    private List<Report> reports(String sql, Map<String, ?> parameters) {
+        List<Report> reports = jdbcTemplate.query(sql, parameters, this::mapReport);
+
+        if (reports.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, Question> questionsById = jdbcTemplate.query(
+                        FIND_BY_IDS,
+                        Map.of("ids", reports.stream().map(report -> report.getQuestion().getId()).distinct().toList()),
+                        this::mapQuestion)
+                .stream()
+                .collect(Collectors.toMap(Question::getId, question -> question));
+
+        return reports.stream()
+                .map(report -> report.toBuilder()
+                        .question(questionsById.get(report.getQuestion().getId()))
+                        .build())
+                .toList();
+    }
+
+    /** The report with a stand-in question that only carries its id; reports() loads the rest. */
+    private Report mapReport(ResultSet resultSet, int rowNumber) throws SQLException {
+        Timestamp resolvedAt = resultSet.getTimestamp("resolved_at");
+        return Report.builder()
+                .id(resultSet.getLong("id"))
+                .question(Question.builder().id(resultSet.getLong("question_id")).build())
+                .reportedBy(resultSet.getLong("reported_by"))
+                .reason(ReportReason.valueOf(resultSet.getString("reason")))
+                .note(resultSet.getString("note"))
+                .status(ReportStatus.valueOf(resultSet.getString("report_status")))
+                .resolvedBy(resultSet.getObject("resolved_by", Long.class))
+                .resolvedAt(resolvedAt == null ? null : resolvedAt.toInstant())
+                .reportedAt(resultSet.getTimestamp("reported_at").toInstant())
+                .build();
     }
 
     /**

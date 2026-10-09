@@ -2,21 +2,26 @@ package org.manu.hs.integration.user;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.manu.hs.domain.user.AuthProvider;
 import org.manu.hs.domain.user.User;
 import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.domain.user.UserStatus;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * DELETE /users/me
  */
+@ExtendWith(OutputCaptureExtension.class)
 class DeleteCurrentUserTest extends AbstractIntegrationTest {
 
     @Test
@@ -146,6 +151,20 @@ class DeleteCurrentUserTest extends AbstractIntegrationTest {
 
         // Then
         response.expectStatus().isUnauthorized();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a signed-in member
+            When they delete their account
+            Then the audit log records it, by id only
+            """)
+    void accountDeletionIsAudited(CapturedOutput output) {
+        // When
+        deleteCurrentUser().expectStatus().isNoContent();
+
+        // Then
+        assertTrue(output.getAll().contains("account_deleted user=1001"));
     }
 
     private RestTestClient.ResponseSpec deleteCurrentUser() {

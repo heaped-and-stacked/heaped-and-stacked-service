@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Getter;
 import org.manu.hs.domain.question.Question;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.question.VoteTotals;
 
 import java.time.Instant;
 import java.util.List;
@@ -26,8 +27,15 @@ public class QuestionResponse {
     private Long updatedBy;
     private Instant createdAt;
     private Instant updatedAt;
+    /** How many learners voted it up and down; only counted for the author's own list (questions/mine), 0 elsewhere. */
+    private int upVotes;
+    private int downVotes;
 
     public static QuestionResponse toDto(Question question) {
+        return toDto(question, VoteTotals.NONE);
+    }
+
+    public static QuestionResponse toDto(Question question, VoteTotals votes) {
         return QuestionResponse.builder()
                 .id(question.getId())
                 .title(question.getTitle())
@@ -41,6 +49,8 @@ public class QuestionResponse {
                 .updatedBy(question.getUpdatedBy())
                 .createdAt(question.getCreatedAt())
                 .updatedAt(question.getUpdatedAt())
+                .upVotes(votes.getUp())
+                .downVotes(votes.getDown())
                 .build();
     }
 }

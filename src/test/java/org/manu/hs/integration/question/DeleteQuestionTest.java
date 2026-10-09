@@ -2,20 +2,26 @@ package org.manu.hs.integration.question;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * DELETE /content/questions/{id}
  */
+@ExtendWith(OutputCaptureExtension.class)
 class DeleteQuestionTest extends AbstractIntegrationTest {
 
     @Test
@@ -170,6 +176,47 @@ class DeleteQuestionTest extends AbstractIntegrationTest {
                 .expectStatus().isBadRequest()
                 .expectBody()
                 .jsonPath("$.message").isNotEmpty();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a submitted question by a member that nobody has answered
+            When gym staff send a DELETE request for it
+            Then the question is deleted and HTTP 204 is returned
+            """)
+    void deleteQuestionReturnsNoContentWhenStaffDeletesSubmittedQuestion() {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = delete(questionId);
+
+        // Then
+        response.expectStatus().isNoContent();
+
+        assertQuestionDoesNotExist(questionId);
+    }
+
+    @Test
+    @DisplayName("""
+            Given a question nobody has answered
+            When an admin deletes it
+            Then the audit log records who deleted which question
+            """)
+    void questionDeletionIsAudited(CapturedOutput output) {
+        // Given
+        insertConcept("java-core");
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        actingAs(ADMIN);
+
+        // When
+        delete(questionId).expectStatus().isNoContent();
+
+        // Then
+        assertTrue(output.getAll().contains("question_deleted by=1003 question=" + questionId));
     }
 
     private RestTestClient.ResponseSpec delete(Long questionId) {

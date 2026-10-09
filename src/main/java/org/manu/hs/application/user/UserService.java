@@ -1,12 +1,15 @@
 package org.manu.hs.application.user;
 
+import org.manu.hs.application.common.Validations;
 import org.manu.hs.application.common.exception.InvalidFieldValueException;
 import org.manu.hs.application.user.command.SignInCommand;
 import org.manu.hs.application.user.command.UpdateProfileCommand;
+import org.manu.hs.application.user.exception.HouseAccountException;
 import org.manu.hs.application.user.exception.LastAdminException;
 import org.manu.hs.application.user.exception.UserNotActiveException;
 import org.manu.hs.application.user.exception.UserNotFoundException;
 import org.manu.hs.domain.user.AuthProvider;
+import org.manu.hs.domain.user.Overview;
 import org.manu.hs.domain.user.User;
 import org.manu.hs.domain.user.UserIdentity;
 import org.manu.hs.domain.user.UserRepository;
@@ -15,6 +18,7 @@ import org.manu.hs.domain.user.UserStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -23,6 +27,7 @@ import java.util.stream.Collectors;
 
 import static org.manu.hs.application.common.Validations.requireNonBlank;
 import static org.manu.hs.application.common.Validations.requireNonNull;
+import static org.manu.hs.application.common.Validations.requireSingleLine;
 
 /**
  * User rules, building users from commands, and user persistence.
@@ -35,6 +40,10 @@ import static org.manu.hs.application.common.Validations.requireNonNull;
 class UserService {
 
     private static final int MAX_DISPLAY_NAME_LENGTH = 200;
+    /** The account that owns the gym's content, as the content migration creates it. */
+    private static final String HOUSE_ACCOUNT_NAME = "Heaped & Stacked";
+    /** "This week" on the admin overview: the 7 days up to now. */
+    private static final Duration WEEK = Duration.ofDays(7);
 
     private final UserRepository userRepository;
     private final Set<String> bootstrapAdminIds;
@@ -71,6 +80,7 @@ class UserService {
                     "displayName",
                     "must be at most %d characters".formatted(MAX_DISPLAY_NAME_LENGTH));
         }
+        requireSingleLine(command.getDisplayName(), "displayName");
     }
 
     /** Admins change a user's status to ACTIVE or BLOCKED; DELETED only comes from the user. */
@@ -117,8 +127,25 @@ class UserService {
      */
     void requireNotLastActiveAdmin(User user) {
         final boolean activeAdmin = user.getRole() == UserRole.ADMIN && user.getStatus() == UserStatus.ACTIVE;
-        if (activeAdmin && userRepository.countActiveAdmins() <= 1) {
+        if (activeAdmin && userRepository.countActiveAdminsLocking() <= 1) {
             throw new LastAdminException(user.getId());
+        }
+    }
+
+    /** The admin overview's numbers; "this week" is the 7 days up to now, and the house account isn't a user. */
+    Overview countOverview(Instant now) {
+        return userRepository.countOverview(now.minus(WEEK), HOUSE_ACCOUNT_NAME);
+    }
+
+    /**
+     * Refuses to delete, block or change the role of the house account, which owns the gym's
+     * content: the account the content migration creates under HOUSE_ACCOUNT_NAME, with no
+     * sign-in linked. (A member who renames themselves "Heaped & Stacked" still has their GitHub
+     * login, so they aren't mistaken for it.)
+     */
+    void requireNotHouseAccount(User user) {
+        if (HOUSE_ACCOUNT_NAME.equals(user.getDisplayName()) && !userRepository.hasIdentity(user.getId())) {
+            throw new HouseAccountException(user.getId());
         }
     }
 
@@ -167,15 +194,28 @@ class UserService {
         userRepository.update(deletedUser(user, now));
     }
 
+    /** Erases the user's sets, votes and feedback, on an erasure request. */
+    void eraseActivity(User user) {
+        userRepository.eraseActivityOf(user.getId());
+    }
+
     /** Pure: the user to create on a first sign-in. */
     User newUser(SignInCommand command, UserRole role, Instant now) {
         return User.builder()
-                .displayName(command.getDisplayName() != null ? command.getDisplayName() : command.getProviderLogin())
+                .displayName(isValidDisplayName(command.getDisplayName()) ? command.getDisplayName() : command.getProviderLogin())
                 .avatarUrl(command.getAvatarUrl())
                 .role(role)
                 .status(UserStatus.ACTIVE)
                 .lastLoginAt(now)
                 .build();
+    }
+
+    /**
+     * Whether a name follows the rules members' own names follow (validate(UpdateProfileCommand)):
+     * a provider's name that doesn't is replaced by the login, so every display name follows them.
+     */
+    private static boolean isValidDisplayName(String name) {
+        return name != null && !name.isBlank() && name.length() <= MAX_DISPLAY_NAME_LENGTH && Validations.isSingleLine(name);
     }
 
     /** Pure: the provider account to link to a new user. */

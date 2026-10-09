@@ -4,6 +4,8 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
 import org.manu.hs.domain.question.Question;
+import org.manu.hs.domain.question.Vote;
+import org.manu.hs.domain.question.VoteTotals;
 
 import java.util.List;
 
@@ -28,8 +30,14 @@ public class LearningQuestionResponse {
      * included if it's new to them. 0: they've all been answered at least once.
      */
     private int unansweredCount;
+    /** How many learners voted the question up and down. */
+    private int upVotes;
+    private int downVotes;
+    /** The current learner's own vote; null if they haven't voted (always, for a visitor). */
+    private Vote myVote;
 
-    public static LearningQuestionResponse toDto(Question question, int unansweredCount) {
+    public static LearningQuestionResponse toDto(
+            Question question, int unansweredCount, VoteTotals votes, Vote myVote) {
         return LearningQuestionResponse.builder()
                 .id(question.getId())
                 .title(question.getTitle())
@@ -38,6 +46,9 @@ public class LearningQuestionResponse {
                 .source(question.getSource())
                 .conceptTags(List.copyOf(question.getConceptTags()))
                 .unansweredCount(unansweredCount)
+                .upVotes(votes.getUp())
+                .downVotes(votes.getDown())
+                .myVote(myVote)
                 .build();
     }
 }

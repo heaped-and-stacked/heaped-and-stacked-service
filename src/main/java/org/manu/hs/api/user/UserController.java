@@ -2,8 +2,10 @@ package org.manu.hs.api.user;
 
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import org.manu.hs.api.user.dto.CurrentUserResponse;
 import org.manu.hs.api.user.dto.UpdateProfileRequest;
 import org.manu.hs.api.user.dto.UserResponse;
+import org.manu.hs.application.content.ContentApplication;
 import org.manu.hs.application.user.UserApplication;
 import org.manu.hs.application.user.command.UpdateProfileCommand;
 import org.manu.hs.domain.user.User;
@@ -29,12 +31,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController {
 
     private final UserApplication userApplication;
+    private final ContentApplication contentApplication;
     private final UserSessions userSessions;
 
     @GetMapping
     @ResponseStatus(HttpStatus.OK)
-    public UserResponse getCurrentUser(@AuthenticationPrincipal SignedInUser signedInUser) {
-        return UserResponse.toDto(userApplication.getUser(signedInUser.getUserId()));
+    public CurrentUserResponse getCurrentUser(@AuthenticationPrincipal SignedInUser signedInUser) {
+        return CurrentUserResponse.toDto(
+                userApplication.getUser(signedInUser.getUserId()),
+                contentApplication.canContribute());
     }
 
     @PutMapping

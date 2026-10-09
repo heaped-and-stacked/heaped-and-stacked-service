@@ -50,7 +50,8 @@ class UserServiceTest {
         return Stream.of(
                 arguments("display name is null", null, "displayName is required"),
                 arguments("display name is blank", "   ", "displayName is required"),
-                arguments("display name has 201 characters", "x".repeat(201), "displayName must be at most 200 characters"));
+                arguments("display name has 201 characters", "x".repeat(201), "displayName must be at most 200 characters"),
+                arguments("display name hides a zero-width space", "admin​", "displayName must be one line without invisible characters"));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -154,7 +155,7 @@ class UserServiceTest {
             """)
     void requireNotLastActiveAdminRefusesTheOnlyActiveAdmin() {
         // Given
-        when(userRepository.countActiveAdmins()).thenReturn(1);
+        when(userRepository.countActiveAdminsLocking()).thenReturn(1);
         User admin = aUser(UserRole.ADMIN, UserStatus.ACTIVE);
 
         // When / Then
@@ -169,7 +170,7 @@ class UserServiceTest {
             """)
     void requireNotLastActiveAdminAllowsWhenAnotherAdminRemains() {
         // Given
-        when(userRepository.countActiveAdmins()).thenReturn(2);
+        when(userRepository.countActiveAdminsLocking()).thenReturn(2);
         User admin = aUser(UserRole.ADMIN, UserStatus.ACTIVE);
 
         // When / Then
@@ -215,6 +216,33 @@ class UserServiceTest {
         assertEquals(UserRole.MEMBER, user.getRole());
         assertEquals(UserStatus.ACTIVE, user.getStatus());
         assertEquals(NOW, user.getLastLoginAt());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("namesBreakingTheDisplayNameRules")
+    @DisplayName("""
+            Given a first sign-in where the provider's name breaks the rules members' own names follow
+            When the user to create is built
+            Then the provider login is used instead, so every display name follows the same rules,
+            however it was set
+            """)
+    void newUserFallsBackToProviderLoginWhenTheNameBreaksTheRules(String description, String name) {
+        // Given
+        SignInCommand command = aSignIn(name, null);
+
+        // When
+        User user = userService.newUser(command, UserRole.MEMBER, NOW);
+
+        // Then
+        assertEquals("coder", user.getDisplayName());
+    }
+
+    static Stream<Arguments> namesBreakingTheDisplayNameRules() {
+        return Stream.of(
+                arguments("too long", "x".repeat(201)),
+                arguments("two lines", "Iron\nCoder"),
+                arguments("a right-to-left override", "Iron \u202ECoder"),
+                arguments("blank", "   "));
     }
 
     @Test

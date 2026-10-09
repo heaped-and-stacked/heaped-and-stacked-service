@@ -6,6 +6,9 @@ import org.manu.hs.api.learning.dto.LearningQuestionResponse;
 import org.manu.hs.domain.concept.ConceptStatus;
 import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.QuestionStatus;
+import org.manu.hs.domain.question.ReportReason;
+import org.manu.hs.domain.question.Vote;
+import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
@@ -125,6 +128,54 @@ class GetNextLearningQuestionTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
+            Given two questions new to the learner, one of them liked by six other learners
+            (up votes and praise, each learner counted once; a down vote doesn't count)
+            When the learner asks for the next question many times
+            Then both come up, in no fixed order, and the liked one comes up more often
+            (weight 1 + ln(1 + likes): about 3 to 1 here)
+            """)
+    void getNextQuestionFavoursLikedQuestionsWithoutFixingTheOrder() {
+        // Given
+        insertConcept("java-core");
+        Long liked = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        Long notLiked = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        for (long liker = 2001; liker <= 2007; liker++) {
+            insertUser(liker, UserRole.MEMBER);
+        }
+        insertVote(liked, 2001L, Vote.UP);
+        insertVote(liked, 2002L, Vote.UP);
+        insertVote(liked, 2003L, Vote.UP);
+        insertVote(liked, 2004L, Vote.UP);
+        insertReport(liked, 2004L, ReportReason.PRAISE);
+        insertReport(liked, 2005L, ReportReason.PRAISE);
+        insertReport(liked, 2006L, ReportReason.PRAISE);
+        insertVote(notLiked, 2007L, Vote.DOWN);
+        actingAs(OTHER_USER);
+
+        // When
+        // Random by design: 6 likes give 2.95 to 1, so the liked one comes first about 75% of the
+        // time. With 200 draws, it falls below 125 by chance about once in 25,000 runs; without
+        // the weight (50%), it would reach 125 about once in 5,000.
+        Map<Long, Integer> timesReturned = new HashMap<>();
+        for (int draw = 0; draw < 200; draw++) {
+            LearningQuestionResponse next = getNext("")
+                    .expectStatus().isOk()
+                    .expectBody(LearningQuestionResponse.class)
+                    .returnResult()
+                    .getResponseBody();
+            assertNotNull(next);
+            timesReturned.merge(next.getId(), 1, Integer::sum);
+        }
+
+        // Then
+        int likedTimes = timesReturned.getOrDefault(liked, 0);
+        int notLikedTimes = timesReturned.getOrDefault(notLiked, 0);
+        assertTrue(notLikedTimes > 0, "the question nobody liked must come up sometimes");
+        assertTrue(likedTimes >= 125, "the liked question must come up more often, but came up " + likedTimes + " of 200 times");
+    }
+
+    @Test
+    @DisplayName("""
             Given two new questions, one of which the learner already saw in this workout
             When the learner sends a GET request to the next question endpoint, skipping that one
             Then the other question is returned, so a workout never repeats a question
@@ -144,6 +195,29 @@ class GetNextLearningQuestionTest extends AbstractIntegrationTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.id").isEqualTo(other.intValue());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a new question
+            When the learner asks for the next question with an empty entry in the skip list
+            Then the question is still returned: the empty entry is ignored, instead of making every
+            question look skipped and ending the workout early
+            """)
+    void getNextQuestionIgnoresAnEmptySkipEntry() {
+        // Given
+        insertConcept("java-core");
+        Long question = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = getNext("?skip=&skip=" + (question + 1000));
+
+        // Then
+        response
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.id").isEqualTo(question.intValue());
     }
 
     @Test
@@ -243,6 +317,107 @@ class GetNextLearningQuestionTest extends AbstractIntegrationTest {
                 .expectBody()
                 .jsonPath("$.id").isEqualTo(onlyQuestion.intValue())
                 .jsonPath("$.unansweredCount").isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("""
+            Given the only available question has three open reports, from three learners
+            When a learner sends a GET request to the next question endpoint
+            Then no content is returned: the question is held back until the reports are decided
+            """)
+    void getNextQuestionHoldsBackQuestionWithThreeOpenReports() {
+        // Given
+        insertConcept("java-core");
+        Long reported = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        insertReport(reported, AUTHOR);
+        insertReport(reported, OTHER_USER);
+        insertReport(reported, ADMIN);
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = getNext("");
+
+        // Then
+        response.expectStatus().isNoContent();
+    }
+
+    @Test
+    @DisplayName("""
+            Given the only available question has two open reports and a dismissed one
+            When a learner sends a GET request to the next question endpoint
+            Then it is still returned, as only open reports hold a question back
+            """)
+    void getNextQuestionStillServesQuestionWithFewerThanThreeOpenReports() {
+        // Given
+        insertConcept("java-core");
+        Long reported = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        insertReport(reported, AUTHOR);
+        insertReport(reported, OTHER_USER);
+        setReportStatus(insertReport(reported, ADMIN), "DISMISSED", AUTHOR);
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = getNext("");
+
+        // Then
+        response
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.id").isEqualTo(reported.intValue());
+    }
+
+    @Test
+    @DisplayName("""
+            Given the only available question has three open pieces of praise, from three learners
+            When a learner sends a GET request to the next question endpoint
+            Then it is still returned, as only problems hold a question back
+            """)
+    void getNextQuestionStillServesQuestionWithOpenPraise() {
+        // Given
+        insertConcept("java-core");
+        Long praised = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        insertReport(praised, AUTHOR, ReportReason.PRAISE);
+        insertReport(praised, OTHER_USER, ReportReason.PRAISE);
+        insertReport(praised, ADMIN, ReportReason.PRAISE);
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = getNext("");
+
+        // Then
+        response
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.id").isEqualTo(praised.intValue());
+    }
+
+    @Test
+    @DisplayName("""
+            Given two available questions, one of them answered by a member
+            When a visitor who is not signed in sends a GET request to the next question endpoint
+            Then a question is returned without its sample solution, and both count as unanswered,
+            as a visitor has no history
+            """)
+    void getNextQuestionServesVisitorsAsIfEverythingIsNew() {
+        // Given
+        insertConcept("java-core");
+        Long answered = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        actingAs(OTHER_USER);
+        submitAnswer(answered, "Their answer");
+        actingAsVisitor();
+
+        // When
+        RestTestClient.ResponseSpec response = getNext("");
+
+        // Then
+        response
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.id").exists()
+                .jsonPath("$.sampleSolution").doesNotExist()
+                .jsonPath("$.unansweredCount").isEqualTo(2)
+                .jsonPath("$.myVote").isEmpty();
     }
 
     private RestTestClient.ResponseSpec getNext(String query) {
