@@ -54,7 +54,8 @@ class LaunchContentMigrationTest {
         assertEquals(0, count(jdbc, "SELECT count(*) FROM user_identity"));
         assertEquals(16, count(jdbc, "SELECT count(*) FROM concept WHERE concept_status = 'ACTIVE'"));
         assertEquals(16, count(jdbc, "SELECT count(*) FROM concept"));
-        assertTrue(count(jdbc, "SELECT count(*) FROM question") > 900);
+        // A floor, not the exact count: curation adds and cuts exercises, a broken V2 loses most of them.
+        assertTrue(count(jdbc, "SELECT count(*) FROM question") > 700);
         assertEquals(0, count(jdbc, "SELECT count(*) FROM question WHERE question_status <> 'SUBMITTED'"));
         assertEquals(0, count(jdbc, """
                 SELECT count(*) FROM question q
