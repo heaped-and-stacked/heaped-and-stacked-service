@@ -11,7 +11,7 @@
 #
 # db.env: DB_HOST, DB_PORT (default 5432), DB_NAME, DB_OWNER_USER, DB_OWNER_PASSWORD.
 # Base image pinned by digest; Dependabot (docker) proposes new digests.
-FROM flyway/flyway:12.4.0-alpine@sha256:b43c3d9b7227687682a9124451ac3dbc9b0003eca65290ad1dcda760345bc680
+FROM flyway/flyway:13.11.1-alpine@sha256:ca71f3b89abb622198c0c462bb66bada4d0fecc64c4998f2c76a751cd969dcef
 
 USER root
 RUN apk add --no-cache postgresql16-client
