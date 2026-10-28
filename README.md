@@ -312,12 +312,9 @@ The schema is Flyway's; the gym's launch content is a seed, loaded once:
 | `question_vote` | learners' votes on questions, one per learner and question |
 | `spring_session*` | sign-in sessions |
 
-**Until the first deploy to the test environment, schema changes go into V1.** Editing it changes
-its checksum: apply the change to the local database by hand, then record the new checksum
-(`perl dev/flyway-checksum.pl` in `heaped-and-stacked-workspace`). **From that deploy on, migrations are frozen:**
-every schema change is a new `V2__…sql` (`V3__…`), and works with the API version before it
-(expand, then contract). Content isn't migrated at all: once an environment is seeded, the app
-owns its content.
+**V1 is frozen: it ran on the test environment on 28 Oct 2026.** Every schema change is a new
+`V2__…sql` (`V3__…`), and works with the API version before it (expand, then contract).
+Content isn't migrated at all: once an environment is seeded, the app owns its content.
 
 ## Tests
 
