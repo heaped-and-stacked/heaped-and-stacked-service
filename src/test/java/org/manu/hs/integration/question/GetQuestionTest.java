@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.manu.hs.api.content.dto.QuestionResponse;
 import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.question.QuestionStatus;
 import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.integration.AbstractIntegrationTest;
@@ -146,6 +147,32 @@ class GetQuestionTest extends AbstractIntegrationTest {
 
         // Then
         response.expectStatus().isUnauthorized();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a member's question live on one concept, waiting on another and declined on a third
+            When its author sends a GET request for it
+            Then the answer says which concepts it waits on and which declined it
+            """)
+    void getQuestionTellsItsAuthorWhereItStands() {
+        // Given
+        insertConcept("java-core");
+        insertConcept("java-generics");
+        insertConcept("java-streams");
+        Long id = insertQuestion(QuestionStatus.SUBMITTED, OTHER_USER, "java-core", "java-generics", "java-streams");
+        setConceptLinkStatus(id, "java-generics", ConceptLinkStatus.PENDING);
+        setConceptLinkStatus(id, "java-streams", ConceptLinkStatus.DECLINED);
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = getQuestion(id);
+
+        // Then
+        response.expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.waitingTags[0]").isEqualTo("java-generics")
+                .jsonPath("$.declinedTags[0]").isEqualTo("java-streams");
     }
 
     private RestTestClient.ResponseSpec getQuestion(Long id) {

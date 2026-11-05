@@ -23,6 +23,14 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class ConceptJdbcRepository implements ConceptRepository {
 
+    // The house account: the user named "Heaped & Stacked" with no sign-in linked (the one
+    // UserService.requireNotHouseAccount spares). Staff curate its concepts, featured or not.
+    private static final String HOUSE_ACCOUNT = """
+            (SELECT u.id FROM app_user u
+             WHERE u.display_name = 'Heaped & Stacked'
+               AND NOT EXISTS (SELECT 1 FROM user_identity i WHERE i.user_id = u.id))
+            """;
+
     // Whether the concept is house-owned: owned by the house account, the user named
     // "Heaped & Stacked" with no sign-in linked (the one UserService.requireNotHouseAccount spares).
     private static final String HOUSE_OWNED = """
@@ -95,7 +103,9 @@ public class ConceptJdbcRepository implements ConceptRepository {
             FROM concept c
             LEFT JOIN question_concept qc ON qc.concept_tag = c.tag
             LEFT JOIN question q ON q.id = qc.question_id AND q.question_status = 'SUBMITTED'
-            WHERE c.created_by = :user_id OR (:staff AND c.featured)
+            WHERE c.created_by = :user_id
+               OR (:staff AND (c.featured OR c.created_by IN """ + HOUSE_ACCOUNT + """
+                   ))
             GROUP BY c.tag
             ORDER BY c.tag
             """;
@@ -177,6 +187,14 @@ public class ConceptJdbcRepository implements ConceptRepository {
                         .toVerify(resultSet.getInt("to_verify"))
                         .waiting(resultSet.getInt("waiting"))
                         .build());
+    }
+
+    @Override
+    public long countOwnedBy(Long userId) {
+        Long count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM concept WHERE created_by = :user_id AND concept_status <> 'RETIRED'",
+                Map.of("user_id", userId), Long.class);
+        return count == null ? 0 : count;
     }
 
     @Override

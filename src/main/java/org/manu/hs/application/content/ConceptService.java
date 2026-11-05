@@ -6,6 +6,7 @@ import org.manu.hs.application.content.command.CreateConceptCommand;
 import org.manu.hs.application.content.command.UpdateConceptCommand;
 import org.manu.hs.application.content.exception.ConceptAlreadyExistsException;
 import org.manu.hs.application.content.exception.ConceptFeaturedException;
+import org.manu.hs.application.content.exception.ConceptLimitReachedException;
 import org.manu.hs.application.content.exception.ConceptHasSubmittedQuestionsException;
 import org.manu.hs.application.content.exception.ConceptInUseException;
 import org.manu.hs.application.content.exception.ConceptModificationForbiddenException;
@@ -46,6 +47,8 @@ import static org.manu.hs.application.common.Validations.requireSingleLine;
 class ConceptService {
 
     private static final Pattern KEBAB_CASE_PATTERN = Pattern.compile("^[a-z0-9]+(-[a-z0-9]+)*$");
+    /** How many concepts a member may own: enough to teach, not to flood the community list. */
+    private static final int MAX_CONCEPTS_PER_MEMBER = 5;
     private static final int MAX_TAG_LENGTH = 100;
     private static final int MAX_NAME_LENGTH = 200;
     private static final int MAX_DESCRIPTION_LENGTH = 2_000;
@@ -94,6 +97,12 @@ class ConceptService {
     void requireCanAddConcepts(boolean staff) {
         if (!canAddConcepts(staff)) {
             throw new ContributionsClosedException("concepts");
+        }
+    }
+
+    void requireRoomForAnotherConcept(Long userId, boolean staff) {
+        if (!staff && conceptRepository.countOwnedBy(userId) >= MAX_CONCEPTS_PER_MEMBER) {
+            throw new ConceptLimitReachedException(MAX_CONCEPTS_PER_MEMBER);
         }
     }
 
@@ -293,7 +302,7 @@ class ConceptService {
                 .status(status)
                 .contributionPolicy(command.getContributionPolicy() != null
                         ? command.getContributionPolicy()
-                        : ContributionPolicy.AUTO_ACCEPT)
+                        : ContributionPolicy.OWNER_APPROVAL)
                 .build();
     }
 

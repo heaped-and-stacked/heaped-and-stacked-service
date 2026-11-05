@@ -140,11 +140,12 @@ public class ContentController {
     public QuestionPageResponse getQuestions(
             @RequestParam(required = false) String concept,
             @RequestParam(required = false) String search,
+            @RequestParam(required = false) Boolean verified,
             @RequestParam(defaultValue = "false") boolean asMember,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        final List<Question> questions = applicationFacade.getCuratedQuestions(asMember, concept, search, page, size);
-        final long totalItems = applicationFacade.countCuratedQuestions(asMember, concept, search);
+        final List<Question> questions = applicationFacade.getCuratedQuestions(asMember, concept, search, verified, page, size);
+        final long totalItems = applicationFacade.countCuratedQuestions(asMember, concept, search, verified);
         final Map<Long, VoteTotals> votes = applicationFacade.getVoteTotals(
                 questions.stream().map(Question::getId).toList());
         return QuestionPageResponse.builder()

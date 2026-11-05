@@ -108,6 +108,7 @@ public class UserApplication {
         final User existing = userService.findExistingOrThrow(userId);
         userService.requireNotLastActiveAdmin(existing);
 
+        userService.handOverConcepts(existing);
         userService.softDelete(existing, Instant.now());
         AUDIT.info("account_deleted user={}", userId);
     }
@@ -182,6 +183,10 @@ public class UserApplication {
         }
 
         final User changed = userService.changeStatus(existing, newStatus);
+        if (newStatus == UserStatus.BLOCKED) {
+            userService.handOverConcepts(existing);
+            userService.declineWaitingQuestions(existing, userProvider.userId());
+        }
         AUDIT.info("status_changed by={} user={} status={}", userProvider.userId(), userId, newStatus);
         return changed;
     }
@@ -200,6 +205,7 @@ public class UserApplication {
         if (eraseActivity) {
             userService.eraseActivity(existing);
         }
+        userService.handOverConcepts(existing);
         userService.softDelete(existing, Instant.now());
         AUDIT.info("account_deleted by={} user={} activity_erased={}", userProvider.userId(), userId, eraseActivity);
     }

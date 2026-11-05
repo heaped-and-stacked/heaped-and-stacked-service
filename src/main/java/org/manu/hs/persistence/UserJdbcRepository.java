@@ -77,8 +77,14 @@ public class UserJdbcRepository implements UserRepository {
                    (SELECT COUNT(DISTINCT qc.question_id)
                       FROM question_concept qc
                       JOIN question q ON q.id = qc.question_id
+                      JOIN concept c ON c.tag = qc.concept_tag
                      WHERE qc.link_status = 'PENDING'
-                       AND q.question_status = 'SUBMITTED') AS questions_awaiting_review
+                       AND q.question_status = 'SUBMITTED'
+                       AND (c.featured OR c.created_by IN (
+                            SELECT h.id FROM app_user h
+                            WHERE h.display_name = :house_account_name
+                              AND NOT EXISTS (SELECT 1 FROM user_identity i WHERE i.user_id = h.id))))
+                   AS questions_awaiting_review
             FROM app_user u
             WHERE u.user_status <> 'DELETED'
               AND (u.display_name IS DISTINCT FROM :house_account_name
@@ -240,6 +246,32 @@ public class UserJdbcRepository implements UserRepository {
     @Override
     public int countActiveAdminsLocking() {
         return jdbcTemplate.queryForList(LOCK_ACTIVE_ADMINS, Map.of(), Long.class).size();
+    }
+
+    @Override
+    public void handOverConceptsOf(Long userId) {
+        jdbcTemplate.update("""
+                UPDATE concept c
+                SET created_by = h.id, updated_by = h.id
+                FROM (SELECT u.id FROM app_user u
+                      WHERE u.display_name = :house_account_name
+                        AND NOT EXISTS (SELECT 1 FROM user_identity i WHERE i.user_id = u.id)) h
+                WHERE c.created_by = :user_id
+                """, new MapSqlParameterSource()
+                .addValue("user_id", userId)
+                .addValue("house_account_name", "Heaped & Stacked"));
+    }
+
+    @Override
+    public void declineWaitingQuestionsOf(Long userId, Long decidedBy) {
+        jdbcTemplate.update("""
+                UPDATE question_concept qc
+                SET link_status = 'DECLINED', decided_by = :decided_by, decided_at = now()
+                FROM question q
+                WHERE q.id = qc.question_id AND q.created_by = :user_id AND qc.link_status = 'PENDING'
+                """, new MapSqlParameterSource()
+                .addValue("user_id", userId)
+                .addValue("decided_by", decidedBy));
     }
 
     @Override

@@ -130,34 +130,11 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
-            Given a question accepted for one concept
-            When its author edits it without changing its concepts
-            Then the concept keeps its accepted state, so edits never re-open a decision
+            Given a question declined for a concept by that concept's owner
+            When its author picks the concept again
+            Then the concept is back on the question, waiting for its owner's decision
             """)
-    void updateQuestionKeepsAcceptedLinkWhenConceptsUnchanged() {
-        // Given
-        insertConcept("java-core");
-        setContributionPolicy("java-core", ContributionPolicy.OWNER_APPROVAL);
-        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, OTHER_USER, "java-core");
-        actingAs(OTHER_USER);
-
-        // When
-        RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core"));
-
-        // Then
-        response.expectStatus().isOk();
-
-        assertEquals(ConceptLinkStatus.ACCEPTED, findConceptLinkStatus(questionId, "java-core"));
-    }
-
-    @Test
-    @DisplayName("""
-            Given a question accepted for one concept and declined for another by that concept's owner
-            When its author removes the declined concept in one edit and adds it back in the next
-            Then the decline stands: a declined concept drops off the question for good, so edits
-            can't undo an owner's decision
-            """)
-    void updateQuestionCantUndoADecline() {
+    void updateQuestionAsksForApprovalAgainWhenTheAuthorPicksADeclinedConcept() {
         // Given
         insertConcept("java-core");
         insertConcept("java-generics");
@@ -167,17 +144,36 @@ class UpdateQuestionTest extends AbstractIntegrationTest {
         actingAs(OTHER_USER);
 
         // When
-        update(questionId, validQuestionJson("java-core")).expectStatus().isOk();
         RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core", "java-generics"));
 
         // Then
-        response
-                .expectStatus().isOk()
+        response.expectStatus().isOk()
                 .expectBody()
-                .jsonPath("$.conceptTags.length()").isEqualTo(1)
-                .jsonPath("$.conceptTags[0]").isEqualTo("java-core");
+                .jsonPath("$.conceptTags.length()").isEqualTo(2);
+        assertEquals(ConceptLinkStatus.PENDING, findConceptLinkStatus(questionId, "java-generics"));
+    }
 
-        assertEquals(ConceptLinkStatus.DECLINED, findConceptLinkStatus(questionId, "java-generics"));
+    @Test
+    @DisplayName("""
+            Given a member's verified question accepted for a gym concept whose owner approves contributions
+            When its author changes what it says
+            Then it stays accepted, so athletes keep training it, and is no longer verified
+            """)
+    void updateQuestionKeepsAnApprovedQuestionAcceptedAndChecksItAgainWhenItsAuthorChangesIt() {
+        // Given
+        insertConcept("java-core");
+        setContributionPolicy("java-core", ContributionPolicy.OWNER_APPROVAL);
+        Long questionId = insertQuestion(QuestionStatus.SUBMITTED, OTHER_USER, "java-core");
+        setQuestionVerifiedBy(questionId, ADMIN);
+        actingAs(OTHER_USER);
+
+        // When
+        RestTestClient.ResponseSpec response = update(questionId, validQuestionJson("java-core"));
+
+        // Then
+        response.expectStatus().isOk();
+        assertEquals(ConceptLinkStatus.ACCEPTED, findConceptLinkStatus(questionId, "java-core"));
+        assertNull(findQuestionVerifiedBy(questionId));
     }
 
     @Test

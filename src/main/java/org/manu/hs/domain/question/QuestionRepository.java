@@ -23,13 +23,13 @@ public interface QuestionRepository {
     /**
      * One page of the questions the user curates, newest first: their own, for staff every question
      * on a featured concept, and on a filtered concept the user curates every question on it that
-     * isn't declined. Both filters are optional (null): a concept the question is on, and part of
-     * the title, any case.
+     * isn't declined. The filters are optional (null): a concept the question is on, part of the
+     * title, any case, and whether it's verified.
      */
     List<Question> findCurated(
-            Long userId, boolean staff, String conceptTag, String titleSearch, int limit, long offset);
+            Long userId, boolean staff, String conceptTag, String titleSearch, Boolean verified, int limit, long offset);
     /** How many questions match the same filters as findCurated, across every page. */
-    long countCurated(Long userId, boolean staff, String conceptTag, String titleSearch);
+    long countCurated(Long userId, boolean staff, String conceptTag, String titleSearch, Boolean verified);
     /**
      * One page of the links of submitted questions waiting for approval on the user's own concepts,
      * and for staff on featured concepts too. Oldest question first.
@@ -44,6 +44,8 @@ public interface QuestionRepository {
      * Whether the user may verify the question: staff when it's on any featured concept; otherwise
      * the owners of the concepts it's on (declined links don't count).
      */
+    /** Sends these links, the declined ones among them, back to waiting for a decision. */
+    void reopenDeclinedLinks(Long questionId, List<String> conceptTags);
     boolean canVerify(Long questionId, Long userId, boolean staff);
     /** Whether any concept accepted the question. */
     boolean isAcceptedAnywhere(Long questionId);

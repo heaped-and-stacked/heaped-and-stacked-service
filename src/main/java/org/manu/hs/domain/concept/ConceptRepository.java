@@ -10,6 +10,8 @@ public interface ConceptRepository {
     Concept updateStatus(String tag, ConceptStatus status, Long updatedBy);
 
     Concept updateFeatured(String tag, boolean featured, Long updatedBy);
+    /** How many concepts the user owns, retired ones left out. */
+    long countOwnedBy(Long userId);
     boolean existsByTag(String tag);
     Optional<Concept> findByTag(String tag);
     void deleteByTag(String tag);

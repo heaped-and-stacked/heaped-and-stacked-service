@@ -66,6 +66,7 @@ public class ContentApplication {
         conceptService.requireCanAddConcepts(userProvider.isStaff());
         conceptService.validate(command);
         conceptService.requireTagAvailable(command.getTag());
+        conceptService.requireRoomForAnotherConcept(userProvider.userId(), userProvider.isStaff());
 
         // Owned by their author and published straight away, as their own: it becomes
         // featured only when staff feature it.
@@ -162,7 +163,13 @@ public class ContentApplication {
         // every concept, so they would only approve the link themselves.
         final List<String> awaitingApproval = questionService.tagsAwaitingApproval(
                 concepts, existing.getCreatedBy(), userProvider.isStaff());
-        final Question updated = questionService.update(existing, command, userProvider.userId(), awaitingApproval);
+        final Question saved = questionService.update(existing, command, userProvider.userId(), awaitingApproval);
+
+        // The author asks again by picking a concept that declined the question.
+        if (existing.getCreatedBy().equals(userProvider.userId())) {
+            questionService.reopenDeclined(id, command.getConceptTags());
+        }
+        final Question updated = questionService.findByIdOrThrow(saved.getId());
 
         // An edit by someone who may verify the question keeps the check with the fix; anyone
         // else's edit (an author who doesn't curate it) means it's checked again.
@@ -215,16 +222,16 @@ public class ContentApplication {
      * and every one on a filtered concept the caller curates.
      */
     public List<Question> getCuratedQuestions(
-            boolean asMember, String conceptTag, String titleSearch, int page, int size) {
+            boolean asMember, String conceptTag, String titleSearch, Boolean verified, int page, int size) {
         questionService.validatePage(page, size);
         return questionService.findCurated(
-                userProvider.userId(), staffUnlessAsMember(asMember), conceptTag, titleSearch, page, size);
+                userProvider.userId(), staffUnlessAsMember(asMember), conceptTag, titleSearch, verified, page, size);
     }
 
     /** How many questions getCuratedQuestions finds across every page. */
-    public long countCuratedQuestions(boolean asMember, String conceptTag, String titleSearch) {
+    public long countCuratedQuestions(boolean asMember, String conceptTag, String titleSearch, Boolean verified) {
         return questionService.countCurated(
-                userProvider.userId(), staffUnlessAsMember(asMember), conceptTag, titleSearch);
+                userProvider.userId(), staffUnlessAsMember(asMember), conceptTag, titleSearch, verified);
     }
 
     /**
@@ -249,7 +256,8 @@ public class ContentApplication {
      */
     private boolean curatesAsStaff(Question question) {
         return userProvider.isStaff()
-                && conceptService.findByTags(question.getConceptTags()).stream().anyMatch(Concept::isFeatured);
+                && conceptService.findByTags(question.getConceptTags()).stream()
+                        .anyMatch(concept -> concept.isFeatured() || concept.isHouseOwned());
     }
 
     /** How many learners voted each question up and down; questions nobody voted on are left out. */
@@ -278,7 +286,7 @@ public class ContentApplication {
     /**
      * The concept's owner (or staff) accept or decline a question for that concept only.
      * An accepted question can still be declined later, for example a duplicate spotted later; a
-     * decline is final (the concept drops off the question, see QuestionJdbcRepository).
+     * decline stands (the concept drops off the question) until the author picks the concept again.
      */
     public void reviewQuestion(Long questionId, String conceptTag, ConceptLinkStatus decision) {
         final Question question = questionService.findByIdOrThrow(questionId);

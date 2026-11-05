@@ -198,6 +198,29 @@ class GetOverviewTest extends AbstractIntegrationTest {
         return restClient.get().uri("/admin/overview").exchange();
     }
 
+    @Test
+    @DisplayName("""
+            Given one exercise waiting on a gym concept and one on a member's own concept
+            When an admin sends a GET request to the overview endpoint
+            Then only the first counts: the other is its owner's to decide, not the gym's
+            """)
+    void getOverviewCountsOnlyWhatStaffCanDecide() {
+        // Given
+        insertConcept("java-core");
+        insertCustomConcept("my-katas", org.manu.hs.domain.concept.ConceptStatus.ACTIVE, AUTHOR);
+        insertQuestionAwaitingApproval(OTHER_USER, "java-core");
+        insertQuestionAwaitingApproval(OTHER_USER, "my-katas");
+        actingAs(ADMIN);
+
+        // When
+        RestTestClient.ResponseSpec response = clientSignedInAs(ADMIN).get().uri("/admin/overview").exchange();
+
+        // Then
+        response.expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.questionsAwaitingReview").isEqualTo(1);
+    }
+
     private OverviewResponse getOverview() {
         OverviewResponse overview = request()
                 .expectStatus().isOk()

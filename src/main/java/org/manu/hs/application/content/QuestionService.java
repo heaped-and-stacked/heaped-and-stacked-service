@@ -151,16 +151,16 @@ class QuestionService {
         }
     }
 
-    /** One page of the questions a user curates; a null author means every author's, blank filters are ignored. */
+    /** One page of the questions a user curates; a null author means every author's, blank filters are ignored, and so is a null verified. */
     List<Question> findCurated(
-            Long userId, boolean staff, String conceptTag, String titleSearch, int page, int size) {
+            Long userId, boolean staff, String conceptTag, String titleSearch, Boolean verified, int page, int size) {
         return questionRepository.findCurated(
-                userId, staff, filterOrNull(conceptTag), filterOrNull(titleSearch), size, (long) page * size);
+                userId, staff, filterOrNull(conceptTag), filterOrNull(titleSearch), verified, size, (long) page * size);
     }
 
-    long countCurated(Long userId, boolean staff, String conceptTag, String titleSearch) {
+    long countCurated(Long userId, boolean staff, String conceptTag, String titleSearch, Boolean verified) {
         return questionRepository.countCurated(
-                userId, staff, filterOrNull(conceptTag), filterOrNull(titleSearch));
+                userId, staff, filterOrNull(conceptTag), filterOrNull(titleSearch), verified);
     }
 
     private static String filterOrNull(String filter) {
@@ -294,6 +294,11 @@ class QuestionService {
 
     Question updateStatus(Long id, QuestionStatus status, Long updatedBy) {
         return questionRepository.updateStatus(id, status, updatedBy);
+    }
+
+    /** The author picked these concepts again: the ones that declined the question decide again. */
+    void reopenDeclined(Long questionId, List<String> conceptTags) {
+        questionRepository.reopenDeclinedLinks(questionId, conceptTags);
     }
 
     /** Records the concept owner's (or staff's) decision on a question for that concept. */

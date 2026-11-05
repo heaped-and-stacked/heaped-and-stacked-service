@@ -23,6 +23,9 @@ public class QuestionResponse {
     private QuestionStatus status;
     private String source;
     private List<String> conceptTags;
+    /** Of conceptTags, the ones it still waits on; and the concepts that declined it, which aren't in conceptTags. */
+    private List<String> waitingTags;
+    private List<String> declinedTags;
     /** Verified: checked by whoever curates it (a clear question, a correct answer). */
     private boolean verified;
     private Long createdBy;
@@ -47,6 +50,8 @@ public class QuestionResponse {
                 .status(question.getStatus())
                 .source(question.getSource())
                 .conceptTags(List.copyOf(question.getConceptTags()))
+                .waitingTags(List.copyOf(question.getWaitingTags()))
+                .declinedTags(List.copyOf(question.getDeclinedTags()))
                 .verified(question.isVerified())
                 .createdBy(question.getCreatedBy())
                 .updatedBy(question.getUpdatedBy())

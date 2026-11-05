@@ -33,6 +33,14 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class QuestionJdbcRepository implements QuestionRepository {
 
+    // The house account: the user named "Heaped & Stacked" with no sign-in linked (the one
+    // UserService.requireNotHouseAccount spares). Staff curate its concepts, featured or not.
+    private static final String HOUSE_ACCOUNT = """
+            (SELECT u.id FROM app_user u
+             WHERE u.display_name = 'Heaped & Stacked'
+               AND NOT EXISTS (SELECT 1 FROM user_identity i WHERE i.user_id = u.id))
+            """;
+
     // Aggregates each question's concept tags into a single array column in the same
     // round trip, instead of one extra query per question (N+1). A concept whose owner declined
     // the question isn't one of its tags any more (the DECLINED link stays, as the decision).
@@ -45,6 +53,12 @@ public class QuestionJdbcRepository implements QuestionRepository {
                            FILTER (WHERE qc.concept_tag IS NOT NULL),
                        ARRAY[]::text[]
                    ) AS concept_tags,
+                   ARRAY(SELECT w.concept_tag::text FROM question_concept w
+                         WHERE w.question_id = q.id AND w.link_status = 'PENDING'
+                         ORDER BY w.concept_tag) AS waiting_tags,
+                   ARRAY(SELECT d.concept_tag::text FROM question_concept d
+                         WHERE d.question_id = q.id AND d.link_status = 'DECLINED'
+                         ORDER BY d.concept_tag) AS declined_tags,
                    q.verified_by, q.verified_at
             FROM question q
             LEFT JOIN question_concept qc ON qc.question_id = q.id AND qc.link_status <> 'DECLINED'
@@ -64,18 +78,21 @@ public class QuestionJdbcRepository implements QuestionRepository {
             SELECT_WITH_CONCEPT_TAGS + " WHERE q.id IN (:ids) " + GROUP_BY_QUESTION;
 
     // Links of submitted questions still waiting on a decision: on the caller's own concepts, and
-    // for staff on featured concepts too. :user_id is the caller, :staff whether they're staff.
+    // for staff on featured and house concepts too. :user_id is the caller, :staff whether they're staff.
     private static final String LINKS_AWAITING_REVIEW = """
              FROM question_concept qc
             JOIN question q ON q.id = qc.question_id
             JOIN concept c ON c.tag = qc.concept_tag
+            JOIN app_user a ON a.id = q.created_by
             WHERE qc.link_status = 'PENDING'
               AND q.question_status = 'SUBMITTED'
-              AND (c.created_by = :user_id OR (:staff AND c.featured))
+              AND (c.created_by = :user_id
+                   OR (:staff AND (c.featured OR c.created_by IN """ + HOUSE_ACCOUNT + """
+                   )))
             """;
 
     // Oldest question first: whoever waited longest is reviewed first.
-    private static final String FIND_LINKS_AWAITING_REVIEW = "SELECT qc.question_id, qc.concept_tag"
+    private static final String FIND_LINKS_AWAITING_REVIEW = "SELECT qc.question_id, qc.concept_tag, a.display_name AS author_name"
             + LINKS_AWAITING_REVIEW + " ORDER BY qc.question_id, qc.concept_tag LIMIT :limit OFFSET :offset";
 
     private static final String COUNT_LINKS_AWAITING_REVIEW = "SELECT COUNT(*)" + LINKS_AWAITING_REVIEW;
@@ -98,6 +115,7 @@ public class QuestionJdbcRepository implements QuestionRepository {
                    q.question_status, q.source,
                    q.created_by, q.updated_by, q.created_at, q.updated_at,
                    array_agg(qc.concept_tag::text ORDER BY qc.concept_tag) AS concept_tags,
+                   ARRAY[]::text[] AS waiting_tags, ARRAY[]::text[] AS declined_tags,
                    q.verified_by, q.verified_at
             FROM question q
             JOIN question_concept qc ON qc.question_id = q.id AND qc.link_status = 'ACCEPTED'
@@ -108,7 +126,9 @@ public class QuestionJdbcRepository implements QuestionRepository {
                    OR (:pool = 'TO_VERIFY' AND q.verified_at IS NULL AND CASE
                        WHEN EXISTS (
                            SELECT 1 FROM question_concept vq JOIN concept vc ON vc.tag = vq.concept_tag
-                           WHERE vq.question_id = q.id AND vq.link_status <> 'DECLINED' AND vc.featured)
+                           WHERE vq.question_id = q.id AND vq.link_status <> 'DECLINED'
+                             AND (vc.featured OR vc.created_by IN """ + HOUSE_ACCOUNT + """
+                   ))
                        THEN :staff
                        ELSE EXISTS (
                            SELECT 1 FROM question_concept vq JOIN concept vc ON vc.tag = vq.concept_tag
@@ -194,7 +214,9 @@ public class QuestionJdbcRepository implements QuestionRepository {
             SELECT CASE
                 WHEN EXISTS (
                     SELECT 1 FROM question_concept qc JOIN concept c ON c.tag = qc.concept_tag
-                    WHERE qc.question_id = :question_id AND qc.link_status <> 'DECLINED' AND c.featured)
+                    WHERE qc.question_id = :question_id AND qc.link_status <> 'DECLINED'
+                      AND (c.featured OR c.created_by IN """ + HOUSE_ACCOUNT + """
+                   ))
                 THEN :staff
                 ELSE EXISTS (
                     SELECT 1 FROM question_concept qc JOIN concept c ON c.tag = qc.concept_tag
@@ -227,16 +249,21 @@ public class QuestionJdbcRepository implements QuestionRepository {
              WHERE (q.created_by = :created_by
                     OR (:staff AND EXISTS (
                         SELECT 1 FROM question_concept g JOIN concept gc ON gc.tag = g.concept_tag
-                        WHERE g.question_id = q.id AND gc.featured))
+                        WHERE g.question_id = q.id
+                          AND (gc.featured OR gc.created_by IN """ + HOUSE_ACCOUNT + """
+                   )))
                     OR (NOT :any_concept AND EXISTS (
                         SELECT 1 FROM question_concept m JOIN concept mc ON mc.tag = m.concept_tag
                         WHERE m.question_id = q.id AND m.concept_tag = :concept_tag
                           AND m.link_status <> 'DECLINED'
-                          AND (mc.created_by = :created_by OR (:staff AND mc.featured)))))
+                          AND (mc.created_by = :created_by
+                               OR (:staff AND (mc.featured OR mc.created_by IN """ + HOUSE_ACCOUNT + """
+                   ))))))
                AND (:any_concept OR EXISTS (
                        SELECT 1 FROM question_concept f
                        WHERE f.question_id = q.id AND f.concept_tag = :concept_tag))
                AND (:any_title OR q.title ILIKE :title_pattern ESCAPE '\\')
+               AND (:any_verified OR (q.verified_at IS NOT NULL) = :verified)
             """;
 
     // Newest first: the latest question matters most.
@@ -288,13 +315,21 @@ public class QuestionJdbcRepository implements QuestionRepository {
             ON CONFLICT (question_id, concept_tag) DO NOTHING
             """;
 
-    // Declined links are never removed: re-adding the concept then hits the kept row (ON CONFLICT
-    // DO NOTHING above), so an author can't undo an owner's decline by removing and re-adding it.
+    // Declined links are never removed: re-adding the concept hits the kept row (ON CONFLICT DO
+    // NOTHING above), and it's the author's picking it again that asks for approval again.
     private static final String DELETE_REMOVED_CONCEPT_LINKS = """
             DELETE FROM question_concept
             WHERE question_id = :question_id
               AND concept_tag NOT IN (:concept_tags)
               AND link_status <> 'DECLINED'
+            """;
+
+    private static final String REOPEN_DECLINED_CONCEPT_LINKS = """
+            UPDATE question_concept
+            SET link_status = 'PENDING', decided_by = NULL, decided_at = NULL
+            WHERE question_id = :question_id
+              AND concept_tag IN (:concept_tags)
+              AND link_status = 'DECLINED'
             """;
 
     private static final String INSERT_REPORT = """
@@ -494,29 +529,31 @@ public class QuestionJdbcRepository implements QuestionRepository {
 
     @Override
     public List<Question> findCurated(
-            Long userId, boolean staff, String conceptTag, String titleSearch, int limit, long offset) {
-        final MapSqlParameterSource params = curatedFilter(userId, staff, conceptTag, titleSearch)
+            Long userId, boolean staff, String conceptTag, String titleSearch, Boolean verified, int limit, long offset) {
+        final MapSqlParameterSource params = curatedFilter(userId, staff, conceptTag, titleSearch, verified)
                 .addValue("limit", limit)
                 .addValue("offset", offset);
         return jdbcTemplate.query(FIND_CURATED, params, this::mapQuestion);
     }
 
     @Override
-    public long countCurated(Long userId, boolean staff, String conceptTag, String titleSearch) {
+    public long countCurated(Long userId, boolean staff, String conceptTag, String titleSearch, Boolean verified) {
         Long count = jdbcTemplate.queryForObject(
-                COUNT_CURATED, curatedFilter(userId, staff, conceptTag, titleSearch), Long.class);
+                COUNT_CURATED, curatedFilter(userId, staff, conceptTag, titleSearch, verified), Long.class);
         return count == null ? 0 : count;
     }
 
     private static MapSqlParameterSource curatedFilter(
-            Long userId, boolean staff, String conceptTag, String titleSearch) {
+            Long userId, boolean staff, String conceptTag, String titleSearch, Boolean verified) {
         return new MapSqlParameterSource()
                 .addValue("staff", staff)
                 .addValue("created_by", userId)
                 .addValue("any_concept", conceptTag == null)
                 .addValue("concept_tag", conceptTag == null ? "" : conceptTag)
                 .addValue("any_title", titleSearch == null)
-                .addValue("title_pattern", titleSearch == null ? "" : "%" + escapeLike(titleSearch) + "%");
+                .addValue("title_pattern", titleSearch == null ? "" : "%" + escapeLike(titleSearch) + "%")
+                .addValue("any_verified", verified == null)
+                .addValue("verified", Boolean.TRUE.equals(verified));
     }
 
     /** Makes \, % and _ match themselves in an ILIKE pattern with ESCAPE '\'. */
@@ -596,6 +633,16 @@ public class QuestionJdbcRepository implements QuestionRepository {
                         .addValue("concept_tag", conceptTag)
                         .addValue("link_status", status.name())
                         .addValue("decided_by", decidedBy));
+    }
+
+    @Override
+    public void reopenDeclinedLinks(Long questionId, List<String> conceptTags) {
+        if (conceptTags.isEmpty()) {
+            return;
+        }
+        jdbcTemplate.update(REOPEN_DECLINED_CONCEPT_LINKS, new MapSqlParameterSource()
+                .addValue("question_id", questionId)
+                .addValue("concept_tags", conceptTags));
     }
 
     @Override
@@ -806,10 +853,15 @@ public class QuestionJdbcRepository implements QuestionRepository {
      * their questions in a single query.
      */
     private List<ConceptLink> linksAwaitingReview(String sql, MapSqlParameterSource parameters) {
-        List<Map.Entry<Long, String>> waiting = jdbcTemplate.query(
+        List<ConceptLink> waiting = jdbcTemplate.query(
                 sql,
                 parameters,
-                (resultSet, rowNumber) -> Map.entry(resultSet.getLong("question_id"), resultSet.getString("concept_tag")));
+                (resultSet, rowNumber) -> ConceptLink.builder()
+                        .question(Question.builder().id(resultSet.getLong("question_id")).build())
+                        .conceptTag(resultSet.getString("concept_tag"))
+                        .status(ConceptLinkStatus.PENDING)
+                        .authorName(resultSet.getString("author_name"))
+                        .build());
 
         if (waiting.isEmpty()) {
             return List.of();
@@ -817,17 +869,13 @@ public class QuestionJdbcRepository implements QuestionRepository {
 
         Map<Long, Question> questionsById = jdbcTemplate.query(
                         FIND_BY_IDS,
-                        Map.of("ids", waiting.stream().map(Map.Entry::getKey).distinct().toList()),
+                        Map.of("ids", waiting.stream().map(link -> link.getQuestion().getId()).distinct().toList()),
                         this::mapQuestion)
                 .stream()
                 .collect(Collectors.toMap(Question::getId, question -> question));
 
         return waiting.stream()
-                .map(link -> ConceptLink.builder()
-                        .question(questionsById.get(link.getKey()))
-                        .conceptTag(link.getValue())
-                        .status(ConceptLinkStatus.PENDING)
-                        .build())
+                .map(link -> link.toBuilder().question(questionsById.get(link.getQuestion().getId())).build())
                 .toList();
     }
 
@@ -880,6 +928,8 @@ public class QuestionJdbcRepository implements QuestionRepository {
                 .createdAt(resultSet.getTimestamp("created_at").toInstant())
                 .updatedAt(resultSet.getTimestamp("updated_at").toInstant())
                 .conceptTags(readTags(resultSet, "concept_tags"))
+                .waitingTags(readTags(resultSet, "waiting_tags"))
+                .declinedTags(readTags(resultSet, "declined_tags"))
                 .verifiedBy(resultSet.getObject("verified_by", Long.class))
                 .verifiedAt(resultSet.getTimestamp("verified_at") == null
                         ? null : resultSet.getTimestamp("verified_at").toInstant())

@@ -182,6 +182,46 @@ class GetReviewsTest extends AbstractIntegrationTest {
                 .jsonPath("$.message").isEqualTo("size must be between 1 and 100");
     }
 
+    @Test
+    @DisplayName("""
+            Given a question waiting for approval, written by a member with a name
+            When the concept's owner sends a GET request to the reviews endpoint
+            Then the author's name comes with it
+            """)
+    void getReviewsNamesTheAuthor() {
+        // Given
+        insertConcept("java-core", "Java Core", "Fundamentals", List.of(), ConceptStatus.ACTIVE, AUTHOR);
+        insertQuestionAwaitingApproval(OTHER_USER, "java-core");
+        actingAs(AUTHOR);
+
+        // When
+        ReviewResponse review = getReviews("").getItems().getFirst();
+
+        // Then
+        assertEquals(findUser(OTHER_USER).getDisplayName(), review.getAuthorName());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a question waiting on a concept handed over to the house account, not featured
+            When a staff member sends a GET request to the reviews endpoint
+            Then it's there: the house account's concepts are staff's to curate
+            """)
+    void getReviewsReturnsWhatWaitsOnAHouseOwnedConceptToStaff() {
+        // Given
+        Long house = insertHouseAccount();
+        insertCustomConcept("orphaned", ConceptStatus.ACTIVE, house);
+        Long waiting = insertQuestionAwaitingApproval(OTHER_USER, "orphaned");
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        List<ReviewResponse> reviews = getReviews("").getItems();
+
+        // Then
+        assertEquals(List.of(waiting), reviews.stream().map(review -> review.getQuestion().getId()).toList());
+    }
+
     private ReviewPageResponse getReviews(String query) {
         ReviewPageResponse page = restClient
                 .get()

@@ -199,9 +199,13 @@ users (roles, blocking). Content rules ask `CurrentUserProvider.isStaff()`, user
 `app.content.members-add-concepts` (env `MEMBERS_ADD_QUESTIONS`, `MEMBERS_ADD_CONCEPTS`), both false by
 default: only staff add questions and concepts; a member who tries gets 403 ("Only staff may add
 questions for now"), and `GET /users/me` says `canAddQuestions` / `canAddConcepts`, so the web app
-hides the matching + NEW button. Members still edit what they already wrote. At launch, questions
-on and concepts off: members add questions to the featured concepts, where they wait for staff's
-approval (featured concepts approve contributions).
+hides the matching + NEW button. Members still edit what they already wrote. At launch both are on:
+members add questions, which wait for approval on concepts that ask for it (featured concepts do),
+and up to five concepts of their own, which ask for approval unless told otherwise.
+
+**Leaving:** when an owner deletes their account or is blocked, their concepts pass to the house
+account, and staff curate them, featured or not. Blocking also declines their waiting questions.
+**Asking again:** a decline stands until the author picks the concept again, which asks again.
 
 **Concepts:**
 - A concept belongs to its author and is published when created, as their own (`featured`

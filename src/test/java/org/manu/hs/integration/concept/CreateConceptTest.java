@@ -57,7 +57,7 @@ class CreateConceptTest extends AbstractIntegrationTest {
         assertEquals("Java Core", createdConcept.getName());
         assertEquals("Fundamentals of Java programming language", createdConcept.getDescription());
         assertEquals(ConceptStatus.ACTIVE, createdConcept.getStatus());
-        assertEquals(ContributionPolicy.AUTO_ACCEPT, createdConcept.getContributionPolicy());
+        assertEquals(ContributionPolicy.OWNER_APPROVAL, createdConcept.getContributionPolicy());
         assertEquals(AUTHOR, createdConcept.getCreatedBy());
         assertEquals(AUTHOR, createdConcept.getUpdatedBy());
         assertNotNull(createdConcept.getCreatedAt());
@@ -67,7 +67,7 @@ class CreateConceptTest extends AbstractIntegrationTest {
         Concept dbRecord = findConceptByTag("java-core");
         assertEquals("Java Core", dbRecord.getName());
         assertEquals(ConceptStatus.ACTIVE, dbRecord.getStatus());
-        assertEquals(ContributionPolicy.AUTO_ACCEPT, dbRecord.getContributionPolicy());
+        assertEquals(ContributionPolicy.OWNER_APPROVAL, dbRecord.getContributionPolicy());
         assertEquals(AUTHOR, dbRecord.getCreatedBy());
     }
 
@@ -245,6 +245,75 @@ class CreateConceptTest extends AbstractIntegrationTest {
                 "description": "Fundamentals"
             }
             """;
+
+    @Test
+    @DisplayName("""
+            Given a member who owns five concepts
+            When they add a sixth
+            Then 409 is returned and it isn't created
+            """)
+    void createConceptRefusesAMembersSixthConcept() {
+        // Given
+        for (int i = 1; i <= 5; i++) {
+            insertCustomConcept("kata-" + i, ConceptStatus.ACTIVE, AUTHOR);
+        }
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = create("""
+                { "tag": "kata-6", "name": "Kata 6", "description": "One more" }
+                """);
+
+        // Then
+        response.expectStatus().isEqualTo(409);
+        assertConceptDoesNotExist("kata-6");
+    }
+
+    @Test
+    @DisplayName("""
+            Given a staff member who owns five concepts
+            When they add a sixth
+            Then it's created: the limit is for members
+            """)
+    void createConceptLetsStaffAddMoreThanFiveConcepts() {
+        // Given
+        insertUser(STAFF, UserRole.STAFF);
+        for (int i = 1; i <= 5; i++) {
+            insertCustomConcept("kata-" + i, ConceptStatus.ACTIVE, STAFF);
+        }
+        actingAs(STAFF);
+
+        // When
+        RestTestClient.ResponseSpec response = create("""
+                { "tag": "kata-6", "name": "Kata 6", "description": "One more" }
+                """);
+
+        // Then
+        response.expectStatus().isCreated();
+    }
+
+    @Test
+    @DisplayName("""
+            Given a member with five concepts, one of them retired
+            When they add another
+            Then it's created: a retired concept no longer counts
+            """)
+    void createConceptDoesNotCountRetiredConcepts() {
+        // Given
+        for (int i = 1; i <= 4; i++) {
+            insertCustomConcept("kata-" + i, ConceptStatus.ACTIVE, AUTHOR);
+        }
+        insertCustomConcept("kata-5", ConceptStatus.RETIRED, AUTHOR);
+        actingAs(AUTHOR);
+
+        // When
+        RestTestClient.ResponseSpec response = create("""
+                { "tag": "kata-6", "name": "Kata 6", "description": "One more" }
+                """);
+
+        // Then
+        response.expectStatus().isCreated();
+    }
 
     private RestTestClient.ResponseSpec create(String requestBody) {
         return restClient

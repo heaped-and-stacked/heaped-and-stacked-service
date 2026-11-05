@@ -244,6 +244,16 @@ class UserService {
         userRepository.update(deletedUser(user, now));
     }
 
+    /** Someone who leaves can't look after their concepts any more: the house account takes them, so staff do. */
+    void handOverConcepts(User user) {
+        userRepository.handOverConceptsOf(user.getId());
+    }
+
+    /** A blocked member's exercises aren't anyone's to review one by one. */
+    void declineWaitingQuestions(User user, Long decidedBy) {
+        userRepository.declineWaitingQuestionsOf(user.getId(), decidedBy);
+    }
+
     /** Erases the user's sets, votes and feedback, on an erasure request. */
     void eraseActivity(User user) {
         userRepository.eraseActivityOf(user.getId());

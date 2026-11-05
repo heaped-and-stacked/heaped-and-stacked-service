@@ -3,6 +3,8 @@ package org.manu.hs.integration.user;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.user.UserRole;
 import org.manu.hs.domain.user.UserStatus;
 import org.manu.hs.integration.AbstractIntegrationTest;
@@ -195,6 +197,29 @@ class UpdateUserStatusTest extends AbstractIntegrationTest {
         // Then
         response.expectStatus().isEqualTo(409);
         assertEquals(UserStatus.ACTIVE, findUser(1005L).getStatus());
+    }
+
+    @Test
+    @DisplayName("""
+            Given a member with an exercise waiting for approval, and a concept of their own
+            When an admin blocks them
+            Then what they had waiting is declined, and their concept passes to the house account
+            """)
+    void blockingAMemberDeclinesWhatTheyHaveWaitingAndHandsOverTheirConcepts() {
+        // Given
+        Long house = insertHouseAccount();
+        insertConcept("java-core");
+        insertCustomConcept("my-katas", ConceptStatus.ACTIVE, OTHER_USER);
+        Long waiting = insertQuestionAwaitingApproval(OTHER_USER, "java-core");
+        actingAs(ADMIN);
+
+        // When
+        updateStatus(OTHER_USER, "BLOCKED").expectStatus().isOk();
+
+        // Then
+        assertEquals(ConceptLinkStatus.DECLINED, findConceptLinkStatus(waiting, "java-core"));
+        assertEquals(ADMIN, findConceptLinkDecidedBy(waiting, "java-core"));
+        assertEquals(house, findConceptByTag("my-katas").getCreatedBy());
     }
 
     private RestTestClient.ResponseSpec updateStatus(Long userId, String status) {

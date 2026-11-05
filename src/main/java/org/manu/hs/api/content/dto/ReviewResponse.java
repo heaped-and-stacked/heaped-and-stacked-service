@@ -16,11 +16,13 @@ public class ReviewResponse {
 
     private String conceptTag;
     private QuestionResponse question;
+    private String authorName;
 
     public static ReviewResponse toDto(ConceptLink link) {
         return ReviewResponse.builder()
                 .conceptTag(link.getConceptTag())
                 .question(QuestionResponse.toDto(link.getQuestion()))
+                .authorName(link.getAuthorName())
                 .build();
     }
 }

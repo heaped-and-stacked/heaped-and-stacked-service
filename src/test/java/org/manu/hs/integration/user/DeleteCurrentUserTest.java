@@ -3,6 +3,8 @@ package org.manu.hs.integration.user;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.manu.hs.domain.concept.ConceptStatus;
+import org.manu.hs.domain.question.ConceptLinkStatus;
 import org.manu.hs.domain.user.AuthProvider;
 import org.manu.hs.domain.user.User;
 import org.manu.hs.domain.user.UserRole;
@@ -165,6 +167,27 @@ class DeleteCurrentUserTest extends AbstractIntegrationTest {
 
         // Then
         assertTrue(output.getAll().contains("account_deleted user=1001"));
+    }
+
+    @Test
+    @DisplayName("""
+            Given a member who owns a concept with an exercise waiting on it
+            When they delete their account
+            Then the concept passes to the house account, and the exercise keeps waiting
+            """)
+    void deletingAnAccountHandsItsConceptsToTheHouseAccount() {
+        // Given
+        Long house = insertHouseAccount();
+        insertCustomConcept("my-katas", ConceptStatus.ACTIVE, AUTHOR);
+        Long waiting = insertQuestionAwaitingApproval(OTHER_USER, "my-katas");
+        actingAs(AUTHOR);
+
+        // When
+        deleteCurrentUser().expectStatus().isNoContent();
+
+        // Then
+        assertEquals(house, findConceptByTag("my-katas").getCreatedBy());
+        assertEquals(ConceptLinkStatus.PENDING, findConceptLinkStatus(waiting, "my-katas"));
     }
 
     private RestTestClient.ResponseSpec deleteCurrentUser() {

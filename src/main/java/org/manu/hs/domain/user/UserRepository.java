@@ -37,6 +37,10 @@ public interface UserRepository {
 
     /** Whether sign-in is invite-only: there's at least one invite. */
     boolean hasInvites();
+    /** Passes the user's concepts to the house account. */
+    void handOverConceptsOf(Long userId);
+    /** Declines every link of the user's questions that still waits for a decision. */
+    void declineWaitingQuestionsOf(Long userId, Long decidedBy);
     /** Whether the username is invited, in any case. */
     boolean isInvited(AuthProvider provider, String providerLogin);
     /** Every invite, by username in any case. */

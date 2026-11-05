@@ -17,6 +17,11 @@ public class Question {
 
     private Long id;
     private List<String> conceptTags;
+    /** Of conceptTags, the ones it still waits on; and the concepts that declined it, which aren't in conceptTags. */
+    @Builder.Default
+    private List<String> waitingTags = List.of();
+    @Builder.Default
+    private List<String> declinedTags = List.of();
     /** Who verified it (checked it: a clear question, a correct answer); null while unverified. */
     private Long verifiedBy;
     private Instant verifiedAt;

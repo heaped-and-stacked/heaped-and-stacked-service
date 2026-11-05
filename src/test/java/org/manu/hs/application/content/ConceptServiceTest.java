@@ -292,7 +292,7 @@ class ConceptServiceTest {
         assertEquals("Fundamentals of Java", concept.getDescription());
         assertEquals(List.of("https://dev.java/learn/"), concept.getExternalReferences());
         assertEquals(ConceptStatus.DRAFT, concept.getStatus());
-        assertEquals(ContributionPolicy.AUTO_ACCEPT, concept.getContributionPolicy());
+        assertEquals(ContributionPolicy.OWNER_APPROVAL, concept.getContributionPolicy());
     }
 
     @Test

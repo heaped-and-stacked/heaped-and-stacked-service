@@ -270,6 +270,32 @@ class GetQuestionsTest extends AbstractIntegrationTest {
         assertEquals(List.of(waiting, accepted), idsOf(page));
     }
 
+    @Test
+    @DisplayName("""
+            Given a staff member and two questions in the gym's pool, only one of them verified
+            When they ask for the verified questions, then for the unverified ones
+            Then each answer holds only that one, and counts only that one
+            """)
+    void getQuestionsFiltersByVerified() {
+        // Given
+        insertConcept("java-core");
+        Long verified = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        Long unverified = insertQuestion(QuestionStatus.SUBMITTED, AUTHOR, "java-core");
+        setQuestionVerifiedBy(verified, ADMIN);
+        insertUser(STAFF, UserRole.STAFF);
+        actingAs(STAFF);
+
+        // When
+        QuestionPageResponse verifiedPage = getQuestions("?verified=true");
+        QuestionPageResponse unverifiedPage = getQuestions("?verified=false");
+
+        // Then
+        assertEquals(List.of(verified), idsOf(verifiedPage));
+        assertEquals(1, verifiedPage.getTotalItems());
+        assertEquals(List.of(unverified), idsOf(unverifiedPage));
+        assertEquals(1, unverifiedPage.getTotalItems());
+    }
+
     private QuestionPageResponse getQuestions(String query, Object... uriVariables) {
         QuestionPageResponse page = request(query, uriVariables)
                 .expectStatus().isOk()
