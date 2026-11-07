@@ -1,7 +1,7 @@
 # Runs every test (unit and Testcontainers integration tests) on each push and pull request.
 # GitHub's Ubuntu runners have Docker, so Testcontainers works as it does locally.
 #
-# On pushes to master and on version tags (v1.0.0), once the tests pass, two Docker images are
+# On pushes to master and release branches (release/1.0) and on version tags (v1.0.0), once the tests pass, two Docker images are
 # published to GitHub Container Registry: ghcr.io/<owner>/heaped-and-stacked-service (the API) and
 # ghcr.io/<owner>/heaped-and-stacked-service-migrations (the schema migrations and the launch seed,
 # Dockerfile.migrations), both tagged:
@@ -13,7 +13,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, "release/**"]
     tags: ["v*"]
   pull_request:
 

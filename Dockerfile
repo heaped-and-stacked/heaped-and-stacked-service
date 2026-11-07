@@ -23,6 +23,9 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -q package -DskipTests -Drevision
 FROM eclipse-temurin:21-jre-alpine@sha256:51ab5e3302e7141ce665ca3ea85e8b5cd648eafbc3c0c90dd79d6537684e4555
 WORKDIR /app
 
+# The base image's system packages, with the security fixes released since it was built.
+RUN apk upgrade --no-cache
+
 # Don't run as root. A numeric user, so platforms that check "not root" without reading
 # /etc/passwd (Kubernetes' runAsNonRoot) can tell.
 RUN addgroup -S -g 10001 app && adduser -S -u 10001 -G app app

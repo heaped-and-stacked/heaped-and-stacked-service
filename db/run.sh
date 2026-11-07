@@ -8,7 +8,7 @@ set -eu
 : "${DB_OWNER_USER:?DB_OWNER_USER is required}"
 : "${DB_OWNER_PASSWORD:?DB_OWNER_PASSWORD is required}"
 DB_PORT="${DB_PORT:-5432}"
-# require: managed databases (Neon) take TLS only. A local rehearsal database sets DB_SSLMODE=disable.
+# require: managed databases take TLS only. A local database sets DB_SSLMODE=disable.
 DB_SSLMODE="${DB_SSLMODE:-require}"
 
 case "${1:-migrate}" in
@@ -21,10 +21,11 @@ case "${1:-migrate}" in
       "$1"
     ;;
   seed)
-    # One transaction; refuses a database that already has content.
+    # An export from another environment, on stdin. One transaction; refuses a database that
+    # already has content.
     PGPASSWORD="$DB_OWNER_PASSWORD" exec psql -q -v ON_ERROR_STOP=1 \
       "host=${DB_HOST} port=${DB_PORT} dbname=${DB_NAME} user=${DB_OWNER_USER} sslmode=${DB_SSLMODE}" \
-      -f /flyway/seed/initial-content.sql
+      -f -
     ;;
   export-seed)
     # This database's content as a new environment's seed, on stdout (read-only): see
