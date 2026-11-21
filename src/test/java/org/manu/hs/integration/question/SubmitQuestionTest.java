@@ -86,6 +86,31 @@ class SubmitQuestionTest extends AbstractIntegrationTest {
 
     @Test
     @DisplayName("""
+            Given a payload whose source is 1,000 characters long, the most allowed
+            When a POST request is sent to the questions endpoint
+            Then the question is created and the whole source is stored
+            """)
+    void submitQuestionStoresASourceOfTheMaximumLength() {
+        // Given
+        insertConcept("java-core");
+        actingAs(AUTHOR);
+        String longestSource = "x".repeat(1_000);
+        String requestBody = validQuestionJson("java-core").replace("\"source\": \"manu\"", "\"source\": \"" + longestSource + "\"");
+
+        // When
+        QuestionResponse createdQuestion = submit(requestBody)
+                .expectStatus().isCreated()
+                .expectBody(QuestionResponse.class)
+                .returnResult()
+                .getResponseBody();
+
+        // Then
+        assertNotNull(createdQuestion);
+        assertEquals(longestSource, findQuestionById(createdQuestion.getId()).getSource());
+    }
+
+    @Test
+    @DisplayName("""
             Given a member submitting a question linked to a concept that is still a draft
             When a POST request is sent to the questions endpoint
             Then a conflict is returned, since submitted questions only link published concepts,

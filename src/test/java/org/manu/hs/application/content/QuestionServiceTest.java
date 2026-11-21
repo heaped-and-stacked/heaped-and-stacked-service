@@ -98,7 +98,7 @@ class QuestionServiceTest {
                 arguments("requirement is too long", aSubmitCommand().requirement("x".repeat(10_001)).build(), "requirement must be at most 10000 characters"),
                 arguments("sampleSolution is null", aSubmitCommand().sampleSolution(null).build(), "sampleSolution is required"),
                 arguments("sampleSolution is too long", aSubmitCommand().sampleSolution("x".repeat(10_001)).build(), "sampleSolution must be at most 10000 characters"),
-                arguments("source is too long", aSubmitCommand().source("x".repeat(201)).build(), "source must be at most 200 characters"),
+                arguments("source is too long", aSubmitCommand().source("x".repeat(1_001)).build(), "source must be at most 1000 characters"),
                 arguments("source has a zero-width space", aSubmitCommand().source("manu​").build(), "source must be one line without invisible characters"),
                 arguments("too many conceptTags", aSubmitCommand().conceptTags(IntStream.rangeClosed(1, 11).mapToObj(i -> "tag-" + i).toList()).build(), "conceptTags must have at most 10 entries"),
                 arguments("difficultyScore is null", aSubmitCommand().difficultyScore(null).build(), "difficultyScore is required"),
