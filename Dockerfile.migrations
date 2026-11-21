@@ -11,7 +11,11 @@
 #
 # db.env: DB_HOST, DB_PORT (default 5432), DB_NAME, DB_OWNER_USER, DB_OWNER_PASSWORD.
 # Base image pinned by digest; new digests are picked by hand (monthly maintenance).
-FROM flyway/flyway:12.4.0-alpine@sha256:b43c3d9b7227687682a9124451ac3dbc9b0003eca65290ad1dcda760345bc680
+FROM flyway/flyway:13.13.0-alpine@sha256:ebea270d71794bf0fd2bd4d0282dd12be324d0efc0a55a81c0f654180591c124
+
+# Its Java (25.0.5) predates the Java4Shell fix (CVE-2026-114938, in 25.0.5.1). Until a Flyway
+# image ships a fixed Java, switch off the vulnerable Base64 code path; drop this line then.
+ENV JAVA_TOOL_OPTIONS="-XX:-UseBASE64Intrinsics"
 
 USER root
 # The base image's system packages with the security fixes released since, and psql.

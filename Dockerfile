@@ -20,7 +20,8 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -q package -DskipTests -Drevision
     && cp target/*.jar app.jar
 
 # ---- run -----------------------------------------------------------------
-FROM eclipse-temurin:21-jre-alpine@sha256:51ab5e3302e7141ce665ca3ea85e8b5cd648eafbc3c0c90dd79d6537684e4555
+# Java 21.0.13.1 or later: the fix for Java4Shell (CVE-2026-114938, the Base64 decoder).
+FROM eclipse-temurin:21-jre-alpine@sha256:5d7689f47d670aca766b9503a70bccc2d73b4eb9221ae8f714ae958313c4ce70
 WORKDIR /app
 
 # The base image's system packages, with the security fixes released since it was built.
