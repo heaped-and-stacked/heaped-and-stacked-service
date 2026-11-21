@@ -55,7 +55,7 @@ class QuestionService {
     private static final int MAX_DIFFICULTY_SCORE = 10;
     private static final int MAX_TITLE_LENGTH = 120;
     private static final int MAX_TEXT_LENGTH = 10_000;
-    private static final int MAX_SOURCE_LENGTH = 200;
+    private static final int MAX_SOURCE_LENGTH = 1_000;
     private static final int MAX_CONCEPT_TAGS = 10;
     private static final int MAX_PAGE_SIZE = 100;
 
